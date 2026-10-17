@@ -1,0 +1,27 @@
+{
+  "name": "ableton-live-controller",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "bun ./build.ts",
+    "start": "bun ./dist/server/index.js",
+    "mock": "bun ./scripts/mock-live.ts",
+    "typecheck": "tsc --noEmit --skipLibCheck"
+  },
+  "author": "hoiekim",
+  "license": "ISC",
+  "dependencies": {
+    "ableton-live": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.6",
+    "@types/node": "^20.14.10",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.5.3"
+  }
+}

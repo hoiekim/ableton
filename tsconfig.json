@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "module": "commonjs",
+    "esModuleInterop": true,
+    "target": "es2022",
+    "lib": ["dom", "es2022"],
+    "allowJs": true,
+    "resolveJsonModule": true,
+    "moduleResolution": "node",
+    "jsx": "react",
+    "sourceMap": true,
+    "declaration": true,
+    "outDir": "dist",
+    "baseUrl": "./src",
+    "paths": {
+      "client": ["./client"],
+      "client/*": ["./client/*"],
+      "server": ["./server"],
+      "server/*": ["./server/*"],
+      "common": ["./common"],
+      "common/*": ["./common/*"]
+    }
+  }
+}
