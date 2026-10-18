@@ -1,5 +1,6 @@
 import { clamp, seededRandom } from "../music";
 import { Option } from "../patterns";
+import { energyBias, styleAffinity } from "../style";
 import { Decision, DecisionProvider, DecisionRequest } from "./types";
 
 const BUSY_ONSETS = 14;
@@ -18,7 +19,9 @@ export const decideLocally = (request: DecisionRequest): Decision => {
   const bandOnsets = parts.reduce((sum, part) => sum + part.onsets, 0);
   const silent = bandOnsets === 0;
 
-  const energy = request.energyOverride ?? (silent ? previous?.energy ?? 4 : clamp(analysis.energy, 1, 10));
+  const direction = request.direction ?? "";
+  const bandEnergy = silent ? previous?.energy ?? 4 : analysis.energy;
+  const energy = request.energyOverride ?? clamp(bandEnergy + energyBias(direction), 1, 10);
 
   // Someone else already covering this role leaves less room.
   const sameRole = parts.some((part) => part.role === (instrument === "keys" || instrument === "guitar" ? "chords" : instrument));
@@ -36,6 +39,8 @@ export const decideLocally = (request: DecisionRequest): Decision => {
     if (pattern.id === previous?.pattern) total += phraseStart && random() < 0.35 ? 0.5 : 2.5;
     // How well it suits the loaded sound, e.g. no fast arpeggios on a slow pad.
     total += pattern.fit;
+    // What the musician asked for outweighs sticking with the current pattern.
+    total += styleAffinity(direction, pattern.id) * 3;
     return total + random() * 0.5;
   };
   const ranked = [...patterns].sort((a, b) => score(b) - score(a));

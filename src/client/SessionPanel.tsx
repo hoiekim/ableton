@@ -1,4 +1,5 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { MAX_DIRECTION_LENGTH } from "common";
 import { DecisionLog, InputState, PlayerState, PlayerStatus, SessionState } from "common";
 
 const statusLabels: Record<PlayerStatus, string> = {
@@ -103,7 +104,44 @@ const InputRow = ({ input }: { input: InputState }) => (
   </li>
 );
 
-export const SessionPanel = ({ session }: { session: SessionState }) => {
+/** What the musician wants the players to play; sent when submitted. */
+const DirectionInput = ({ direction, onDirection }: { direction: string; onDirection: (text: string) => void }) => {
+  const [text, setText] = useState(direction);
+  const [editing, setEditing] = useState(false);
+  // Follow the server's value (set from another window, say) unless it's being edited.
+  useEffect(() => {
+    if (!editing) setText(direction);
+  }, [direction, editing]);
+  const changed = text.trim() !== direction;
+  return (
+    <form
+      className="direction"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onDirection(text.trim());
+        setEditing(false);
+      }}
+    >
+      <label htmlFor="direction">Style</label>
+      <input
+        id="direction"
+        value={text}
+        maxLength={MAX_DIRECTION_LENGTH}
+        placeholder='e.g. "funky 70s soul, laid back" or "driving punk rock"'
+        onChange={(event) => {
+          setText(event.target.value);
+          setEditing(true);
+        }}
+        onBlur={() => !changed && setEditing(false)}
+      />
+      <button type="submit" disabled={!changed}>
+        {text.trim() || !direction ? "Set" : "Clear"}
+      </button>
+    </form>
+  );
+};
+
+export const SessionPanel = ({ session, onDirection }: { session: SessionState; onDirection: (text: string) => void }) => {
   const { players, inputs, chords, predictedChord, key, bar } = session;
   if (!players.length && !inputs.length) {
     return (
@@ -130,6 +168,7 @@ export const SessionPanel = ({ session }: { session: SessionState }) => {
           </ol>
         )}
       </header>
+      <DirectionInput direction={session.direction} onDirection={onDirection} />
       {players.length > 0 && (
         <div className="players">
           {players.map((player) => (

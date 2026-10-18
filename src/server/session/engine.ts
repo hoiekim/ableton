@@ -1,4 +1,4 @@
-import { DeviceState, Instrument, InputState, TrackState, inputRoles, instruments } from "common";
+import { DeviceState, Instrument, InputState, MAX_DIRECTION_LENGTH, TrackState, inputRoles, instruments } from "common";
 import { LiveStore } from "../store";
 import { BandAnalysis, BarRecord, InputBar, analyzeBand } from "./analyze";
 import { AudioNotes } from "./audio";
@@ -88,6 +88,8 @@ export class SessionEngine {
   private instrumentKeys = new Map<number, string>();
   private instrumentTimer?: ReturnType<typeof setTimeout>;
   private staleInstruments = new Set<number>();
+  /** The musician's style direction, from the web page. */
+  private direction = "";
 
   constructor(private store: LiveStore, private ops: () => LiveOps | undefined) {}
 
@@ -108,6 +110,13 @@ export class SessionEngine {
     }
     setInterval(this.tick, TICK_MS);
     console.info(`[session] Decisions by ${this.provider.name}; listening for Session Input on UDP ${this.config.oscPort}.`);
+  };
+
+  /** Sets the style direction; it's used from the next decision on. */
+  setDirection = (text: string) => {
+    this.direction = text.trim().slice(0, MAX_DIRECTION_LENGTH);
+    console.info(this.direction ? `[session] Direction: "${this.direction}"` : "[session] Direction cleared");
+    this.publish();
   };
 
   private onPacket = (data: Uint8Array) => {
@@ -216,6 +225,7 @@ export class SessionEngine {
       analyze: this.analyzeNow,
       transport: () => this.store.state.transport,
       timing: this.timing,
+      direction: () => this.direction,
       onChange: this.publish,
     });
     if (this.wasPlaying) player.start();
@@ -336,6 +346,7 @@ export class SessionEngine {
       const complete = analysis?.bars.filter((bar) => !bar.partial) ?? [];
       this.store.setSession({
         bar: this.bar,
+        direction: this.direction,
         key: analysis?.key?.name,
         chords: complete.slice(-8).map((bar) => analysis?.chordAt(bar.index).chord?.symbol ?? "–"),
         predictedChord: this.bar && analysis ? analysis.chordAt(this.bar + 1).chord?.symbol : undefined,

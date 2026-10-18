@@ -11,6 +11,8 @@ export interface PlayerContext {
   barsSinceFill: number;
   /** The loaded instrument, as worked out from Live (see instrument.ts). */
   sound?: string;
+  /** The musician's style direction. */
+  direction?: string;
 }
 
 const ROLE_NAMES = { bass: "Bass", chords: "Chords", melody: "Melody", drums: "Drums" } as const;
@@ -55,6 +57,7 @@ const listNames = (names: string[]) => {
 export const describeState = (analysis: BandAnalysis, transport: TransportState, player: PlayerContext) => {
   const lines: string[] = [];
   const { targetBar, phraseLength } = player;
+  if (player.direction) lines.push(`The musician wants: "${player.direction}".`);
   const signature = `${transport.signatureNumerator}/${transport.signatureDenominator}`;
   lines.push(
     `The next bar is bar ${targetBar} of the jam. Tempo ${Math.round(transport.tempo)} BPM, ${signature} time.` +

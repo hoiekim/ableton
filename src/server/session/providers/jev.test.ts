@@ -59,6 +59,14 @@ describe("Jev provider", () => {
     expect(decision).toEqual({ pattern: "walking", energy: 7, fill: true, provider: "jev", confidence: 0.8 });
   });
 
+  test("passes the musician's direction to every question", async () => {
+    const api = fakeApi(ANSWERS);
+    await createJevProvider(defaultConfig.jev, api.fetch).decide(request({ direction: "dub reggae" }), { timeoutMs: 1000 });
+    for (const question of Object.values(api.calls[0].body.questions) as { instructions: string }[]) {
+      expect(question.instructions).toContain('The musician wants: "dub reggae"');
+    }
+  });
+
   test("leaves out the energy question when the device sets energy", async () => {
     const api = fakeApi({ pattern: ANSWERS.pattern, fill: ANSWERS.fill });
     const provider = createJevProvider(defaultConfig.jev, api.fetch);

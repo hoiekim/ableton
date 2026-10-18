@@ -189,6 +189,18 @@ decision model knows what it is playing.
   recorded, so the next decision starts early enough. With a 1.5 s model at
   120 BPM, Jev decided every bar from the third bar on.
 
+## Style direction
+
+The web panel has a Style box for free text that applies to every player, such
+as "funky 70s soul, laid back". It's sent over the socket, kept in memory by the
+engine, and used from the next decision on:
+
+- **Jev:** it reads the text as the first line of the state, and every question
+  begins "The musician wants: …". Follow it.
+- **Local rules** ([style.ts](../src/server/session/style.ts)): genre words favour
+  that genre's patterns strongly enough to beat sticking with the current one,
+  and mood words move energy by ±2.
+
 ## Programmability
 
 - **Settings:** [session.config.ts](../session.config.ts) holds the provider

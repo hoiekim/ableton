@@ -97,6 +97,7 @@ const setup = (options: { provider?: DecisionProvider; chords?: (bar: number) =>
       ], upcoming),
     transport: () => ({ ...initialTransport, isPlaying: live.clock.playing }),
     timing: () => live.clock,
+    direction: () => "",
     onChange: () => {},
   });
   player.start();

@@ -1,5 +1,5 @@
 import type { ServerWebSocket, WebSocketHandler } from "bun";
-import { ClientMessage, ServerMessage, TransportCommand, isTransportCommand } from "common";
+import { ClientMessage, MAX_DIRECTION_LENGTH, ServerMessage, TransportCommand, isTransportCommand } from "common";
 import { LiveStore, StoreChange } from "./store";
 
 // Changes are batched so a burst of updates from Live goes out as one message per kind.
@@ -27,11 +27,19 @@ const parseMessage = (data: string): ClientMessage | undefined => {
   try {
     const message = JSON.parse(data);
     if (message?.type === "command" && isTransportCommand(message.command)) return message;
+    if (message?.type === "direction" && typeof message.text === "string") {
+      return { type: "direction", text: message.text.trim().slice(0, MAX_DIRECTION_LENGTH) };
+    }
   } catch {
     // Ignore malformed messages.
   }
   return undefined;
 };
+
+export interface SocketHandlers {
+  onCommand: (command: TransportCommand) => void;
+  onDirection: (text: string) => void;
+}
 
 /**
  * WebSocket handlers for Bun.serve: sends every client the full state on
@@ -39,7 +47,7 @@ const parseMessage = (data: string): ClientMessage | undefined => {
  */
 export const createSocketHandler = (
   store: LiveStore,
-  onCommand: (command: TransportCommand) => void
+  { onCommand, onDirection }: SocketHandlers
 ): WebSocketHandler => {
   const sockets = new Set<ServerWebSocket>();
   const changes = new Set<ClientChange>();
@@ -67,7 +75,8 @@ export const createSocketHandler = (
     },
     message: (_socket, data) => {
       const message = parseMessage(data.toString());
-      if (message) onCommand(message.command);
+      if (message?.type === "command") onCommand(message.command);
+      if (message?.type === "direction") onDirection(message.text);
     },
     close: (socket) => {
       sockets.delete(socket);

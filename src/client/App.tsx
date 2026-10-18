@@ -5,7 +5,7 @@ import { TrackRow } from "./TrackRow";
 import { useLiveSocket } from "./useLiveSocket";
 
 export const App = () => {
-  const { isOnline, state, sendCommand } = useLiveSocket();
+  const { isOnline, state, sendCommand, sendDirection } = useLiveSocket();
   const { status, transport, tracks } = state;
 
   let connection: Connection;
@@ -34,7 +34,7 @@ export const App = () => {
         disabled={status !== "connected"}
         onCommand={sendCommand}
       />
-      {status === "connected" && <SessionPanel session={state.session} />}
+      {status === "connected" && <SessionPanel session={state.session} onDirection={sendDirection} />}
       <main className="tracks">
         {tracks.map((track) => (
           <TrackRow key={track.id} track={track} />

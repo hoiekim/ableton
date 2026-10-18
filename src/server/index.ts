@@ -35,10 +35,15 @@ const serveClient = async (pathname: string) => {
 const store = new LiveStore();
 const bridge = new LiveBridge(store);
 
-const websocket = createSocketHandler(store, (command) => {
-  bridge.command(command).catch((error) => {
-    console.error(`[live] Command "${command}" failed:`, error);
-  });
+const session = new SessionEngine(store, bridge.ops);
+
+const websocket = createSocketHandler(store, {
+  onCommand: (command) => {
+    bridge.command(command).catch((error) => {
+      console.error(`[live] Command "${command}" failed:`, error);
+    });
+  },
+  onDirection: session.setDirection,
 });
 
 Bun.serve({
@@ -58,4 +63,4 @@ console.info("ableton-live-controller server is up.");
 
 bridge.start();
 
-new SessionEngine(store, bridge.ops).start();
+session.start();

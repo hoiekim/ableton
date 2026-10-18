@@ -71,12 +71,15 @@ export const useLiveSocket = () => {
     };
   }, []);
 
-  const sendCommand = useCallback((command: TransportCommand) => {
+  const send = useCallback((message: ClientMessage) => {
     const socket = socketRef.current;
     if (socket?.readyState !== WebSocket.OPEN) return;
-    const message: ClientMessage = { type: "command", command };
     socket.send(JSON.stringify(message));
   }, []);
 
-  return { isOnline, state, sendCommand };
+  const sendCommand = useCallback((command: TransportCommand) => send({ type: "command", command }), [send]);
+
+  const sendDirection = useCallback((text: string) => send({ type: "direction", text }), [send]);
+
+  return { isOnline, state, sendCommand, sendDirection };
 };

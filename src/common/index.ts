@@ -144,6 +144,8 @@ export interface InputState {
 
 export interface SessionState {
   bar: number;
+  /** The musician's style direction for the players; empty when none. */
+  direction: string;
   key?: string;
   /** Detected chord per recent bar, oldest first. */
   chords: string[];
@@ -152,7 +154,7 @@ export interface SessionState {
   inputs: InputState[];
 }
 
-export const initialSessionState: SessionState = { bar: 0, chords: [], players: [], inputs: [] };
+export const initialSessionState: SessionState = { bar: 0, direction: "", chords: [], players: [], inputs: [] };
 
 export type ServerMessage =
   | { type: "status"; status: ConnectionStatus }
@@ -164,7 +166,13 @@ export const transportCommands = ["play", "stop", "toggleRecord", "toggleMetrono
 
 export type TransportCommand = (typeof transportCommands)[number];
 
-export type ClientMessage = { type: "command"; command: TransportCommand };
+/** Longest style direction the server keeps; the decision model reads it every bar. */
+export const MAX_DIRECTION_LENGTH = 300;
+
+export type ClientMessage =
+  | { type: "command"; command: TransportCommand }
+  /** What the musician wants the players to play, e.g. "funky 70s soul, laid back". */
+  | { type: "direction"; text: string };
 
 export const isTransportCommand = (value: unknown): value is TransportCommand => {
   return transportCommands.includes(value as TransportCommand);

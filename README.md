@@ -55,6 +55,12 @@ in a `.env` file in the project folder, which Bun reads at startup), TypeSafe's
 [Jev](https://docs.typesafe.ai) does, falling back to the rules when it's unsure
 or too slow. If Jev takes longer than a bar, raise the device's Lookahead.
 
+To steer the style, type it in the Session panel's **Style** box, for example
+"funky 70s soul, laid back" or "driving punk rock". Jev reads it with every
+decision. Without Jev, the local rules pick up common genre words (funk, jazz,
+house, rock, reggae, latin…) and mood words (laid back, intense…). The box
+applies to all players and resets when the server restarts.
+
 How it all fits together, and how it was tested: [docs/DESIGN.md](docs/DESIGN.md).
 
 Everything is adjustable in [session.config.ts](session.config.ts): the

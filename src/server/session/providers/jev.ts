@@ -31,7 +31,8 @@ const ENERGY_LEVELS = [
 
 /** The questions sent to Jev for one decision. */
 export const buildQuestions = (request: DecisionRequest, config: SessionConfig["jev"]) => {
-  const preamble = config.instructions ? `${config.instructions}\n` : "";
+  const direction = request.direction ? `The musician wants: "${request.direction}". Follow it.` : "";
+  const preamble = [config.instructions, direction].filter(Boolean).map((line) => `${line}\n`).join("");
   const criteria: Record<string, string> = Object.fromEntries(request.patterns.map((p) => [p.id, p.description]));
   if (request.previous) criteria[HOLD] = HOLD_DESCRIPTION;
   return {

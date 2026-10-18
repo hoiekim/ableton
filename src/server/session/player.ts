@@ -45,6 +45,8 @@ export interface PlayerDeps {
   analyze: () => BandAnalysis;
   transport: () => TransportState;
   timing: () => Timing;
+  /** The musician's style direction; empty when none. */
+  direction: () => string;
   onChange: () => void;
 }
 
@@ -280,6 +282,7 @@ export class Player {
       lastEnergy: previous?.energy,
       barsSinceFill,
       sound: this.profile?.summary,
+      direction: this.deps.direction(),
     });
     return {
       instrument,
@@ -291,6 +294,7 @@ export class Player {
       previous,
       barsSinceFill,
       energyOverride: energy === "auto" ? undefined : energy,
+      direction: this.deps.direction(),
       seed: hashString(`${this.settings.trackId}:${bar}`),
     };
   };

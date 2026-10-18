@@ -15,6 +15,8 @@ export interface DecisionRequest {
   barsSinceFill: number;
   /** Set when the device's Energy control isn't on Auto. */
   energyOverride?: number;
+  /** The musician's style direction, e.g. "funky 70s soul"; empty when none. */
+  direction?: string;
   /** Varies the local rules' small random choices from bar to bar, reproducibly. */
   seed: number;
 }
