@@ -28,13 +28,25 @@ export interface SessionConfig {
   phraseLength: number;
   /** UDP port the Session Input devices send to. */
   oscPort: number;
+  /** Speech-to-text for the Session Voice devices: a local whisper.cpp server, started when one is in the set. */
+  voice: {
+    /** The whisper-server program (from `brew install whisper-cpp`). */
+    whisperServer: string;
+    /** A whisper.cpp model, relative to where the server is started. */
+    model: string;
+    /** Local port for whisper-server; one already running there is reused. */
+    port: number;
+    /** Below this average log probability a transcribed phrase is taken for noise. */
+    minLogprob: number;
+  };
   /** Patterns to add, or to replace built-in ones with the same id. */
   patterns: Partial<Record<Instrument, Pattern[]>>;
 }
 
-export type UserSessionConfig = Partial<Omit<SessionConfig, "jev" | "timing">> & {
+export type UserSessionConfig = Partial<Omit<SessionConfig, "jev" | "timing" | "voice">> & {
   jev?: Partial<SessionConfig["jev"]>;
   timing?: Partial<SessionConfig["timing"]>;
+  voice?: Partial<SessionConfig["voice"]>;
 };
 
 export const defaultConfig: SessionConfig = {
@@ -44,6 +56,7 @@ export const defaultConfig: SessionConfig = {
   slots: 4,
   phraseLength: 4,
   oscPort: 9101,
+  voice: { whisperServer: "whisper-server", model: "models/ggml-base.en.bin", port: 9103, minLogprob: -1 },
   patterns: {},
 };
 
@@ -56,6 +69,12 @@ export const loadConfig = (overrides: UserSessionConfig = userConfig): SessionCo
     jev: { ...defaultConfig.jev, ...overrides.jev },
     timing: { ...defaultConfig.timing, ...overrides.timing },
     oscPort: Number(process.env.SESSION_OSC_PORT) || overrides.oscPort || defaultConfig.oscPort,
+    voice: {
+      ...defaultConfig.voice,
+      ...overrides.voice,
+      ...(process.env.SESSION_WHISPER_MODEL && { model: process.env.SESSION_WHISPER_MODEL }),
+      ...(Number(process.env.SESSION_WHISPER_PORT) && { port: Number(process.env.SESSION_WHISPER_PORT) }),
+    },
     patterns: overrides.patterns ?? {},
   };
 };

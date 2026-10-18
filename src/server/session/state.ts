@@ -1,5 +1,6 @@
 import { Instrument, TransportState } from "common";
 import { BandAnalysis, PartFeatures } from "./analyze";
+import type { HeardSpeech } from "./providers/types";
 
 export interface PlayerContext {
   instrument: Instrument;
@@ -13,6 +14,8 @@ export interface PlayerContext {
   sound?: string;
   /** The musician's style direction. */
   direction?: string;
+  /** What was just said or sung, oldest first. */
+  speech?: HeardSpeech[];
 }
 
 const ROLE_NAMES = { bass: "Bass", chords: "Chords", melody: "Melody", drums: "Drums" } as const;
@@ -58,6 +61,7 @@ export const describeState = (analysis: BandAnalysis, transport: TransportState,
   const lines: string[] = [];
   const { targetBar, phraseLength } = player;
   if (player.direction) lines.push(`The musician wants: "${player.direction}".`);
+  for (const said of player.speech ?? []) lines.push(`Heard on ${said.trackName} ${said.when}: "${said.text}"`);
   const signature = `${transport.signatureNumerator}/${transport.signatureDenominator}`;
   lines.push(
     `The next bar is bar ${targetBar} of the jam. Tempo ${Math.round(transport.tempo)} BPM, ${signature} time.` +

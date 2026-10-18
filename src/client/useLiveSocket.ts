@@ -81,5 +81,7 @@ export const useLiveSocket = () => {
 
   const sendDirection = useCallback((text: string) => send({ type: "direction", text }), [send]);
 
-  return { isOnline, state, sendCommand, sendDirection };
+  const sendListen = useCallback((trackId: number, on: boolean) => send({ type: "listen", trackId, on }), [send]);
+
+  return { isOnline, state, sendCommand, sendDirection, sendListen };
 };

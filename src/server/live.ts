@@ -85,7 +85,7 @@ const watchedClipProps = ["notes", "looping", "loop_start", "loop_end"];
 
 // Session Player and Session Input devices are recognized by their parameter
 // names ("SP Instrument", "SPI Role", ...), so renaming a device is fine.
-const SESSION_PARAM = /^SPI? /;
+const SESSION_PARAM = /^SP[IV]? /;
 
 const RACKS = new Set(["InstrumentGroupDevice", "DrumGroupDevice"]);
 /** Synths whose amp envelope tells something about the sound. */
@@ -546,6 +546,9 @@ class LiveSession {
     return { state, unsubscribes };
   };
 
+  /** Parameter ids of Session devices, by device and parameter name, for changing them. */
+  private sessionParamIds = new Map<number, Map<string, number>>();
+
   /** Reads and observes the parameters of a Session Player or Session Input device. */
   private loadSessionParams = async (state: DeviceState): Promise<Unsubscribe[]> => {
     const raws = await this.children(`id ${state.id}`, "parameters", ["name", "value", "value_items"], state.id);
@@ -559,11 +562,17 @@ class LiveSession {
       .filter((param) => SESSION_PARAM.test(param.name));
     if (!params.length) return [];
 
+    const kind = params.some((param) => param.name.startsWith("SP "))
+      ? ("player" as const)
+      : params.some((param) => param.name.startsWith("SPV "))
+        ? ("voice" as const)
+        : ("input" as const);
     const session = {
-      kind: params.some((param) => param.name.startsWith("SP ")) ? ("player" as const) : ("input" as const),
+      kind,
       params: Object.fromEntries(params.map((param) => [param.name, toParamValue(param.value, param.items)])),
     };
     state.session = session;
+    this.sessionParamIds.set(state.id, new Map(params.map((param) => [param.name, param.id])));
     return Promise.all(
       params.map((param) =>
         this.watch(param.id, "value", (value) => {
@@ -620,6 +629,11 @@ class LiveSession {
     },
     stopTrack: async (trackId) => {
       await this.live.call(`id ${trackId}`, { method: "stop_all_clips", parameters: [] }, trackId);
+    },
+    setSessionParam: async (deviceId, name, value) => {
+      const paramId = this.sessionParamIds.get(deviceId)?.get(name);
+      if (paramId === undefined) throw new Error(`Device ${deviceId} has no parameter "${name}"`);
+      await this.live.set(`id ${paramId}`, "value", value, paramId);
     },
     instrument: async (trackId, afterDeviceId) => {
       const devices = this.tracks.get(trackId)?.devices.map((device) => device.state) ?? [];

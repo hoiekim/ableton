@@ -15,7 +15,8 @@
  * --band clips: the band's parts are clips on Bass and Keys, so the player can
  * read ahead. --band live: the scripted band plays them, and the player only
  * knows what it has heard. It runs on its own ports (LIVE_PORT 9201,
- * SESSION_OSC_PORT 9202, PORT 3201 unless set), next to Live or a running mock.
+ * SESSION_OSC_PORT 9202, PORT 3201, SESSION_WHISPER_PORT 9203 unless set),
+ * next to Live or a running mock.
  */
 import type { Subprocess } from "bun";
 import { parseArgs } from "util";
@@ -35,6 +36,7 @@ const { values } = parseArgs({
 const LIVE_PORT = process.env.LIVE_PORT || "9201";
 const OSC_PORT = process.env.SESSION_OSC_PORT || "9202";
 const PORT = process.env.PORT || "3201";
+const WHISPER_PORT = process.env.SESSION_WHISPER_PORT || "9203";
 const MOCK = `http://127.0.0.1:${LIVE_PORT}/mock`;
 const root = new URL("..", import.meta.url).pathname;
 
@@ -97,7 +99,15 @@ const waitForServer = async () => {
 };
 
 const run = async (tempo: number) => {
-  const env = { ...process.env, LIVE_PORT, MOCK_OSC_PORT: OSC_PORT, SESSION_OSC_PORT: OSC_PORT, PORT, SESSION_PROVIDER: "local" };
+  const env = {
+    ...process.env,
+    LIVE_PORT,
+    MOCK_OSC_PORT: OSC_PORT,
+    SESSION_OSC_PORT: OSC_PORT,
+    PORT,
+    SESSION_WHISPER_PORT: WHISPER_PORT,
+    SESSION_PROVIDER: "local",
+  };
   const mock = Bun.spawn(["bun", "scripts/mock-live.ts"], { cwd: root, env, stdout: "pipe", stderr: "inherit" });
   const mockOutput = lines(mock);
   let server: Subprocess | undefined;

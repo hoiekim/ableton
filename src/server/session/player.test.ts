@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Note } from "tonal";
-import { initialTransport } from "common";
+import { SpeechState, initialTransport } from "common";
 import { BarRecord, UpcomingNotes, analyzeBand } from "./analyze";
 import { defaultConfig } from "./config";
 import { ClipSlotInfo, ClipSpec, LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing, msUntilBar } from "./player";
-import { DecisionProvider, localProvider } from "./providers";
+import { DecisionProvider, decideLocally, localProvider } from "./providers";
 
 const settings: PlayerSettings = {
   deviceId: 50,
@@ -76,16 +76,37 @@ class FakeLive implements LiveOps {
     this.stops++;
   };
   instrument = async () => undefined;
+  setSessionParam = async () => {};
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-const setup = (options: { provider?: DecisionProvider; chords?: (bar: number) => string[]; clips?: boolean } = {}) => {
+/** A decision model that answers at once: the local choice, with its own say on fills. */
+const fakeModel = (fill?: boolean, join = true): DecisionProvider => ({
+  name: "model",
+  decide: async (request) => ({
+    ...decideLocally(request),
+    ...(fill !== undefined && { fill }),
+    ...(request.joinBar !== undefined && { join }),
+    provider: "model",
+  }),
+});
+
+const setup = (
+  options: {
+    provider?: DecisionProvider;
+    chords?: (bar: number) => string[];
+    clips?: boolean;
+    settings?: Partial<PlayerSettings>;
+    speech?: SpeechState[];
+  } = {}
+) => {
   const live = new FakeLive();
+  const speech = options.speech ?? [];
   const chords = options.chords ?? ((bar: number) => LOOP[(bar - 1) % 4]);
   // With clips, the band's Keys clip says what every bar will play.
   const upcoming: UpcomingNotes | undefined = options.clips ? (bar) => bandBar(bar, chords(bar)).inputs : undefined;
-  const player = new Player(settings, {
+  const player = new Player({ ...settings, ...options.settings }, {
     config: defaultConfig,
     provider: options.provider ?? localProvider,
     ops: () => live,
@@ -98,6 +119,7 @@ const setup = (options: { provider?: DecisionProvider; chords?: (bar: number) =>
     transport: () => ({ ...initialTransport, isPlaying: live.clock.playing }),
     timing: () => live.clock,
     direction: () => "",
+    speech: () => speech,
     onChange: () => {},
   });
   player.start();
@@ -109,8 +131,13 @@ const setup = (options: { provider?: DecisionProvider; chords?: (bar: number) =>
       await flush();
     }
   };
-  return { live, player, playUntil };
+  /** Someone says something on the Vocals track now. */
+  const say = (text: string) => speech.unshift({ text, trackName: "Vocals", bar: live.clock.bar, at: Date.now() });
+  return { live, player, playUntil, say };
 };
+
+const firedBars = (live: FakeLive) => live.fires.map((fire) => fire.target);
+const fillBars = (live: FakeLive) => live.writes.filter((write) => write.spec.name.endsWith(" fill")).map((write) => Number(write.spec.name.split(" ")[1]));
 
 describe("Player", () => {
   test("listens for a bar, then fires a clip for every bar before it starts", async () => {
@@ -202,6 +229,66 @@ describe("Player", () => {
     expect(outcomes[0]).toBe("2:missed");
     expect(live.fires.every((fire) => fire.msBefore > 0)).toBe(true);
     expect(live.fires.map((fire) => fire.target)).toContain(4);
+  });
+
+  test("speech while waiting to join brings the player in early, for the decision model to answer", async () => {
+    const { live, player, playUntil, say } = setup({ provider: fakeModel(), settings: { join: 4 } });
+    await playUntil(2);
+    expect(live.fires).toHaveLength(0);
+    say("ok let's go, give me a cue");
+    await playUntil(5);
+    // It would have joined at bar 5; the next bar a decision could still make was 3.
+    expect(firedBars(live)[0]).toBe(3);
+    expect(player.state().recent.at(-1)!.state).toContain('Heard on Vocals this bar: "ok let\'s go, give me a cue"');
+  });
+
+  test("asked early, the decision model may choose to wait for the Join bar", async () => {
+    const { live, player, playUntil, say } = setup({ provider: fakeModel(undefined, false), settings: { join: 4 } });
+    await playUntil(2);
+    say("are you ready?");
+    await playUntil(6);
+    expect(firedBars(live)[0]).toBe(5);
+    expect(player.state().recent.at(-1)).toMatchObject({ bar: 3, outcome: "waited" });
+  });
+
+  test("without the decision model's answer on coming in early, it asks again for the next bar", async () => {
+    let calls = 0;
+    // Its first early answer comes too late; local rules can't answer for it.
+    const flaky: DecisionProvider = {
+      name: "model",
+      decide: async (request) => {
+        if (request.joinBar !== undefined && calls++ === 0) throw new Error("timed out");
+        return { ...decideLocally(request), ...(request.joinBar !== undefined && { join: true }), provider: "model" };
+      },
+    };
+    const { live, player, playUntil, say } = setup({ provider: flaky, settings: { join: 4 } });
+    await playUntil(2);
+    say("ok let's go");
+    await playUntil(6);
+    expect(firedBars(live)[0]).toBe(4);
+    expect(player.state().recent.at(-1)).toMatchObject({ bar: 3, outcome: "waited" });
+    expect(player.state().recent.at(-1)!.fallbackReason).toContain("No answer on coming in early");
+  });
+
+  test("local rules don't read speech, so the player joins as set", async () => {
+    const { live, playUntil, say } = setup({ settings: { join: 4 } });
+    await playUntil(2);
+    say("ok let's go");
+    await playUntil(6);
+    expect(firedBars(live)[0]).toBe(5);
+  });
+
+  test("fills wait for a phrase's last bar, unless someone just asked for one", async () => {
+    const plain = setup({ provider: fakeModel(true) });
+    await plain.playUntil(10);
+    expect(fillBars(plain.live)).toEqual([4, 8]);
+
+    const cued = setup({ provider: fakeModel(true) });
+    await cued.playUntil(5);
+    cued.say("give me a fill");
+    await cued.playUntil(10);
+    // One cued fill straight away, then back to the phrase ends.
+    expect(fillBars(cued.live)).toEqual([4, 6, 8]);
   });
 
   test("switching the device off stops its clips", async () => {

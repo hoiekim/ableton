@@ -24,7 +24,7 @@ export interface ParamValue {
 
 /** Present on Session Player and Session Input devices, recognized by their parameter names. */
 export interface SessionDeviceInfo {
-  kind: "player" | "input";
+  kind: "player" | "input" | "voice";
   /** Parameter values keyed by long name, e.g. "SP Instrument". */
   params: Record<string, ParamValue>;
 }
@@ -86,7 +86,8 @@ export type InputRole = (typeof inputRoles)[number];
 
 export type PlayerStatus = "off" | "waiting" | "listening" | "playing" | "error";
 
-export type DecisionOutcome = "fired" | "kept" | "missed";
+/** "waited": asked early because someone spoke, the player chose not to come in yet. */
+export type DecisionOutcome = "fired" | "kept" | "missed" | "waited";
 
 export interface DecisionLog {
   /** Bar number (1-based, counted from when playback started) the decision is for. */
@@ -142,6 +143,31 @@ export interface InputState {
   lastNotes: string[];
 }
 
+/** A Session Voice device: it records what's said or sung on its track for the players. */
+export interface VoiceState {
+  deviceId: number;
+  trackId: number;
+  trackName: string;
+  on: boolean;
+  connected: boolean;
+}
+
+/** Something said or sung on a Session Voice track, as transcribed. */
+export interface SpeechState {
+  text: string;
+  trackName: string;
+  /** Bar it was heard in (counted from Play); 0 when heard while stopped or before this take. */
+  bar: number;
+  /** When it was heard, as a Unix time in milliseconds. */
+  at: number;
+}
+
+/** The local speech-to-text server the Session Voice devices need. */
+export interface TranscriberState {
+  status: "off" | "starting" | "ready" | "unavailable" | "error";
+  message?: string;
+}
+
 export interface SessionState {
   bar: number;
   /** The musician's style direction for the players; empty when none. */
@@ -152,9 +178,22 @@ export interface SessionState {
   predictedChord?: string;
   players: PlayerState[];
   inputs: InputState[];
+  voices: VoiceState[];
+  /** What was said or sung recently, newest first. */
+  speech: SpeechState[];
+  transcriber: TranscriberState;
 }
 
-export const initialSessionState: SessionState = { bar: 0, direction: "", chords: [], players: [], inputs: [] };
+export const initialSessionState: SessionState = {
+  bar: 0,
+  direction: "",
+  chords: [],
+  players: [],
+  inputs: [],
+  voices: [],
+  speech: [],
+  transcriber: { status: "off" },
+};
 
 export type ServerMessage =
   | { type: "status"; status: ConnectionStatus }
@@ -172,7 +211,9 @@ export const MAX_DIRECTION_LENGTH = 300;
 export type ClientMessage =
   | { type: "command"; command: TransportCommand }
   /** What the musician wants the players to play, e.g. "funky 70s soul, laid back". */
-  | { type: "direction"; text: string };
+  | { type: "direction"; text: string }
+  /** Turns a track's Session Input (or Session Voice) on or off. */
+  | { type: "listen"; trackId: number; on: boolean };
 
 export const isTransportCommand = (value: unknown): value is TransportCommand => {
   return transportCommands.includes(value as TransportCommand);

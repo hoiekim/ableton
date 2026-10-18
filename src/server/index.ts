@@ -44,6 +44,7 @@ const websocket = createSocketHandler(store, {
     });
   },
   onDirection: session.setDirection,
+  onListen: session.setListening,
 });
 
 Bun.serve({

@@ -1,4 +1,5 @@
-import { DeviceState, Instrument, InputState, MAX_DIRECTION_LENGTH, TrackState, inputRoles, instruments } from "common";
+import fs from "fs/promises";
+import { DeviceState, Instrument, InputState, MAX_DIRECTION_LENGTH, SpeechState, TrackState, inputRoles, instruments } from "common";
 import { LiveStore } from "../store";
 import { BandAnalysis, BarRecord, InputBar, analyzeBand } from "./analyze";
 import { AudioNotes } from "./audio";
@@ -11,6 +12,7 @@ import { clamp, liveNoteName } from "./music";
 import { LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing } from "./player";
 import { createProvider } from "./providers";
+import { Transcriber, voiceFile } from "./voice";
 
 const TICK_MS = 15;
 const HISTORY_BARS = 32;
@@ -18,6 +20,8 @@ const ANALYSIS_BARS = 16;
 const STATUS_REFRESH_MS = 1000;
 /** Loading a rack changes a track's devices several times in a row; read the instrument once it settles. */
 const INSTRUMENT_SETTLE_MS = 400;
+/** Phrases kept for the players and the web page. */
+const SPEECH_KEPT = 8;
 
 interface InputMeta {
   deviceId: number;
@@ -29,6 +33,15 @@ interface InputMeta {
   /** Level in dB below which an audio input hears no note. */
   threshold: number;
 }
+
+interface VoiceMeta {
+  deviceId: number;
+  trackId: number;
+  trackName: string;
+  on: boolean;
+}
+
+const isListener = (device: DeviceState) => device.session?.kind === "input" || device.session?.kind === "voice";
 
 const param = (device: DeviceState, name: string, fallback: number) => {
   const value = device.session?.params[name]?.value;
@@ -71,6 +84,11 @@ export class SessionEngine {
   private recorder = new Recorder();
   private players = new Map<number, Player>();
   private inputs = new Map<number, InputMeta>();
+  /** Session Voice devices, which record what's said or sung on their track. */
+  private voices = new Map<number, VoiceMeta>();
+  /** Recent phrases from the voices, newest first. */
+  private speech: SpeechState[] = [];
+  private transcriber: Transcriber;
   /** Note detection for each audio input, from its pitch readings. */
   private audio = new Map<number, AudioNotes>();
   /** The clip playing on each input's track (by track id), tied to the bars counted here. */
@@ -91,7 +109,9 @@ export class SessionEngine {
   /** The musician's style direction, from the web page. */
   private direction = "";
 
-  constructor(private store: LiveStore, private ops: () => LiveOps | undefined) {}
+  constructor(private store: LiveStore, private ops: () => LiveOps | undefined) {
+    this.transcriber = new Transcriber(this.config.voice, () => this.publish());
+  }
 
   start = async () => {
     this.store.subscribe((change) => {
@@ -112,6 +132,23 @@ export class SessionEngine {
     console.info(`[session] Decisions by ${this.provider.name}; listening for Session Input on UDP ${this.config.oscPort}.`);
   };
 
+  /**
+   * Turns what the players hear of a track on or off from the web page: the
+   * On switch of each Session Input and Session Voice on it, so Live stays the
+   * source of truth.
+   */
+  setListening = (trackId: number, on: boolean) => {
+    const ops = this.ops();
+    const track = this.store.state.tracks.find((t) => t.id === trackId);
+    if (!ops || !track) return;
+    for (const device of track.devices.filter(isListener)) {
+      const param = device.session!.kind === "voice" ? "SPV On" : "SPI On";
+      ops.setSessionParam(device.id, param, on ? 1 : 0).catch((error) => {
+        console.error(`[session] Couldn't turn ${device.name} on ${track.name} ${on ? "on" : "off"}:`, error);
+      });
+    }
+  };
+
   /** Sets the style direction; it's used from the next decision on. */
   setDirection = (text: string) => {
     this.direction = text.trim().slice(0, MAX_DIRECTION_LENGTH);
@@ -129,6 +166,10 @@ export class SessionEngine {
       return;
     }
     this.recorder.hello(message.deviceId);
+    if (message.type === "voice") {
+      void this.onVoice(message.deviceId, message.take);
+      return;
+    }
     if (message.type === "note") {
       this.recorder.push({ ...message, receivedAt: performance.now() });
       return;
@@ -136,6 +177,27 @@ export class SessionEngine {
     const notes = this.audioNotes(message.deviceId);
     if (message.type === "onset") notes.onset(message.beat);
     else notes.frame(message.hz, message.amplitude, message.beat, this.inputs.get(message.deviceId)?.threshold ?? -40);
+  };
+
+  /** A Session Voice device recorded a phrase: transcribe it and pass it on to the players. */
+  private onVoice = async (deviceId: number, take: number) => {
+    const file = voiceFile(deviceId, take);
+    const voice = this.voices.get(deviceId);
+    if (!voice?.on) {
+      await fs.rm(file, { force: true });
+      return;
+    }
+    const bar = this.bar;
+    const heardAt = Date.now();
+    try {
+      const text = await this.transcriber.transcribe(file);
+      if (!text) return;
+      console.info(`[voice] ${voice.trackName}${bar ? ` (bar ${bar})` : ""}: "${text}"`);
+      this.speech = [{ text, trackName: voice.trackName, bar, at: heardAt }, ...this.speech].slice(0, SPEECH_KEPT);
+      this.publish();
+    } catch (error) {
+      console.error(`[voice] Couldn't transcribe ${voice.trackName}:`, error);
+    }
   };
 
   private audioNotes = (deviceId: number) => {
@@ -151,6 +213,7 @@ export class SessionEngine {
   private reconcile = () => {
     const seenPlayers = new Set<number>();
     this.inputs.clear();
+    this.voices.clear();
     for (const track of this.store.state.tracks) {
       const playerDevice = track.devices.find((device) => device.session?.kind === "player");
       if (playerDevice) {
@@ -169,6 +232,14 @@ export class SessionEngine {
         continue;
       }
       for (const device of track.devices) {
+        if (device.session?.kind === "voice") {
+          this.voices.set(device.id, {
+            deviceId: device.id,
+            trackId: track.id,
+            trackName: track.name,
+            on: device.isActive && param(device, "SPV On", 1) >= 1,
+          });
+        }
         if (device.session?.kind !== "input") continue;
         this.inputs.set(device.id, {
           deviceId: device.id,
@@ -186,6 +257,7 @@ export class SessionEngine {
       this.players.delete(id);
       this.instrumentKeys.delete(id);
     }
+    if (this.voices.size) void this.transcriber.ensureStarted();
     this.publish();
   };
 
@@ -226,6 +298,7 @@ export class SessionEngine {
       transport: () => this.store.state.transport,
       timing: this.timing,
       direction: () => this.direction,
+      speech: () => this.speech,
       onChange: this.publish,
     });
     if (this.wasPlaying) player.start();
@@ -297,7 +370,7 @@ export class SessionEngine {
     const beat = estimateSongTime(transport, this.store.songTimeAt);
     this.audio.forEach((notes) => notes.idle(beat));
     this.players.forEach((player) => player.tick());
-    if (performance.now() - this.lastPublish > STATUS_REFRESH_MS && (this.inputs.size || this.players.size)) this.publish();
+    if (performance.now() - this.lastPublish > STATUS_REFRESH_MS && (this.inputs.size || this.players.size || this.voices.size)) this.publish();
   };
 
   private onStart = (songBar: number, bpb: number) => {
@@ -309,6 +382,8 @@ export class SessionEngine {
     this.analysis = undefined;
     this.recorder.reset();
     this.clips.clear();
+    // Bars count from Play: anything said so far came before this take.
+    this.speech = this.speech.map((said) => ({ ...said, bar: 0 }));
     this.anchorClips();
     this.players.forEach((player) => player.start());
     // A sample dropped on a pad or a new preset doesn't change the device list; read again on each Play.
@@ -359,6 +434,9 @@ export class SessionEngine {
             lastNotes: [...new Set(notes.filter((note) => !note.held).map((note) => liveNoteName(note.pitch)))],
           };
         }),
+        voices: [...this.voices.values()].map((voice) => ({ ...voice, connected: this.recorder.isConnected(voice.deviceId) })),
+        speech: this.speech,
+        transcriber: this.transcriber.state,
       });
     }, 0);
   };

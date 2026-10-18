@@ -37,7 +37,9 @@ export type OscMessage =
   | { type: "note"; deviceId: number; pitch: number; velocity: number; beat: number }
   | { type: "pitch"; deviceId: number; hz: number; amplitude: number; beat: number }
   | { type: "onset"; deviceId: number; beat: number }
-  | { type: "hello"; deviceId: number; kind: string };
+  | { type: "hello"; deviceId: number; kind: string }
+  /** A Session Voice device finished recording take `take` (see voiceFile). */
+  | { type: "voice"; deviceId: number; take: number };
 
 /** Decodes the Session Input devices' OSC messages; anything else is ignored. */
 export const parseOsc = (buffer: Uint8Array): OscMessage | undefined => {
@@ -63,6 +65,11 @@ export const parseOsc = (buffer: Uint8Array): OscMessage | undefined => {
     const [deviceId, ticks] = args.map(Number);
     if ([deviceId, ticks].some((n) => !Number.isFinite(n))) return undefined;
     return { type: "onset", deviceId, beat: ticks / TICKS_PER_BEAT };
+  }
+  if (packet.address === "/sp/voice" && args.length >= 2) {
+    const [deviceId, take] = args.map(Number);
+    if (![deviceId, take].every(Number.isInteger) || take < 0) return undefined;
+    return { type: "voice", deviceId, take };
   }
   if (packet.address === "/sp/hello" && args.length >= 1) {
     const deviceId = Number(args[0]);

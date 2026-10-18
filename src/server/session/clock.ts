@@ -13,8 +13,17 @@ export const estimateSongTime = (transport: TransportState, reportedAt: number, 
   return transport.songTime + Math.max(now - reportedAt, 0) / msPerBeat(transport);
 };
 
-/** The slowest of recent samples, or `fallback` before there are any. */
-export const slowest = (samples: number[], fallback: number) => (samples.length ? Math.max(...samples) : fallback);
+/** Samples needed before they're trusted over the starting assumption. */
+const TRUSTED_SAMPLES = 5;
+
+/**
+ * The slowest of recent samples. Until there are a few, not below `fallback`
+ * either: one quick first answer says little about the next.
+ */
+export const slowest = (samples: number[], fallback: number) => {
+  const max = samples.length ? Math.max(...samples) : 0;
+  return samples.length >= TRUSTED_SAMPLES ? max : Math.max(max, fallback);
+};
 
 /** 90th percentile of recent samples, or `fallback` before there are any. */
 export const p90 = (samples: number[], fallback: number) => {

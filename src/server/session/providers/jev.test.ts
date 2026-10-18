@@ -67,6 +67,34 @@ describe("Jev provider", () => {
     }
   });
 
+  test("asks every question with what was just said in mind, and lets a cue bring a fill early", async () => {
+    const api = fakeApi(ANSWERS);
+    const speech = [{ text: "ok let's go, give me a cue", trackName: "Vocals", when: "this bar" }];
+    await createJevProvider(defaultConfig.jev, api.fetch).decide(request({ speech, cueAt: Date.now() }), { timeoutMs: 1000 });
+    const { questions } = api.calls[0].body;
+    for (const question of Object.values(questions) as { instructions: string }[]) {
+      expect(question.instructions).toContain("Someone in the band just spoke or sang");
+    }
+    expect(questions.fill.instructions).toContain("play one now if someone just asked for a cue");
+    expect(questions.fill.instructions).not.toContain("never in a bar that starts a phrase");
+
+    await createJevProvider(defaultConfig.jev, api.fetch).decide(request(), { timeoutMs: 1000 });
+    expect(api.calls[1].body.questions.pattern.instructions).not.toContain("spoke or sang");
+    expect(api.calls[1].body.questions.fill.instructions).toContain("never in a bar that starts a phrase");
+  });
+
+  test("asks whether to come in now only when asked early", async () => {
+    const api = fakeApi({ ...ANSWERS, join: { noul: 0.2 } });
+    const jev = createJevProvider(defaultConfig.jev, api.fetch);
+    const early = await jev.decide(request({ joinBar: 5 }), { timeoutMs: 1000 });
+    expect(api.calls[0].body.questions.join).toMatchObject({ type: "noul" });
+    expect(api.calls[0].body.questions.join.instructions).toContain("come in at bar 5");
+    expect(early.join).toBe(false);
+    const normal = await jev.decide(request(), { timeoutMs: 1000 });
+    expect(api.calls[1].body.questions.join).toBeUndefined();
+    expect(normal.join).toBeUndefined();
+  });
+
   test("leaves out the energy question when the device sets energy", async () => {
     const api = fakeApi({ pattern: ANSWERS.pattern, fill: ANSWERS.fill });
     const provider = createJevProvider(defaultConfig.jev, api.fetch);

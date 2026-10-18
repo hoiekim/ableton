@@ -270,6 +270,12 @@ const sessionInputAudio = (role: string) =>
     { name: "SPI Threshold", min: -70, max: 0, value: -40 },
   ]);
 
+const sessionVoice = () =>
+  device("Max Audio Effect", "Session Voice", true, [
+    { name: "SPV On", items: ["Off", "On"], value: 1 },
+    { name: "SPV Threshold", min: -70, max: 0, value: -35 },
+  ]);
+
 type TrackKind = "midi" | "audio" | "group" | "return" | "master";
 
 /** Master and return tracks lack some properties, and only MIDI and audio tracks can be armed. */
@@ -340,7 +346,7 @@ const song = create(
         "audio",
         "Vocals",
         0x85b84d,
-        [sessionInputAudio("Melody"), device("EQ Eight"), device("Compressor"), device("Echo", "Vox Delay")],
+        [sessionVoice(), sessionInputAudio("Melody"), device("EQ Eight"), device("Compressor"), device("Echo", "Vox Delay")],
         { arm: true }
       ),
       track("group", "FX Group", 0xb677f4, [device("Glue Compressor")]),
@@ -1215,8 +1221,24 @@ const sendDue = (time: number) => {
   }
 };
 
+/** The Session Voice devices in the set, with whether they're on. */
+const voiceDevices = () => {
+  const found: { id: number; on: boolean; trackName: string }[] = [];
+  objects.forEach((obj) => {
+    if (obj.kind !== "device") return;
+    const on = (obj.children.parameters ?? []).map((id) => objects.get(id)!).find((param) => param.props.name === "SPV On");
+    if (!on) return;
+    found.push({ id: obj.id, on: !!obj.props.is_active && Number(on.props.value) >= 1, trackName: String(parentOf(obj)?.props.name ?? "") });
+  });
+  return found;
+};
+
+/** Each Session Voice device's last take number, as its counter in Max keeps it. */
+const voiceTakes = new Map<number, number>();
+
 setInterval(() => {
   inputDevices().forEach((input) => udp.send(oscMessage("/sp/hello", [["i", input.id], ["s", input.kind]]), OSC_PORT, "127.0.0.1"));
+  voiceDevices().forEach((voice) => udp.send(oscMessage("/sp/hello", [["i", voice.id], ["s", "voice"]]), OSC_PORT, "127.0.0.1"));
 }, 2000);
 
 // ---- Song clock ----
@@ -1433,6 +1455,21 @@ const actions: Record<string, (query: URLSearchParams) => string> = {
     setProp(song, "tempo", requireParam(query, "bpm"));
     return `tempo ${song.props.tempo}`;
   },
+  // Like singing into the Session Voice device: macOS's speech voice records the
+  // take where the device would, and the server is told it's ready.
+  say: (query) => {
+    const text = requireParam(query, "text");
+    const voice = voiceDevices()[0] ?? reject("No Session Voice device in the set");
+    if (!voice.on) return `Session Voice on ${voice.trackName} is off; nothing recorded`;
+    const take = voiceTakes.get(voice.id) ?? 0;
+    voiceTakes.set(voice.id, take + 1);
+    const file = `/tmp/session-voice-${voice.id}-${take}.wav`;
+    // The system's default voice can render to silence; Samantha always speaks.
+    const speak = Bun.spawnSync(["say", "-v", query.get("voice") ?? "Samantha", "-o", file, "--data-format=LEI16@48000", text]);
+    if (speak.exitCode !== 0) reject(`say failed: ${speak.stderr.toString().trim()}`);
+    udp.send(oscMessage("/sp/voice", [["i", voice.id], ["i", take]]), OSC_PORT, "127.0.0.1");
+    return `${voice.trackName} said "${text}" (take ${take})`;
+  },
   "band-start": () => {
     bandOn = true;
     return `band on: ${bandChords.length}-chord loop`;
@@ -1569,6 +1606,7 @@ const help = () => {
     "  tempo          bpm",
     "  clips          every clip slot with a clip, and what's playing",
     "  param          track, device, name=<parameter>, value",
+    "  say            text, [voice=Samantha]: speak into the Session Voice device (macOS say)",
     "  band-start     the scripted band sends Session Input notes while playing",
     "  band-stop      silence the scripted band",
     "  band-chords    chords=Am7,Fmaj7,C,G (one per bar, looped)",

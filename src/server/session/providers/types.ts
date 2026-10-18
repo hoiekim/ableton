@@ -17,8 +17,21 @@ export interface DecisionRequest {
   energyOverride?: number;
   /** The musician's style direction, e.g. "funky 70s soul"; empty when none. */
   direction?: string;
+  /** What was just said or sung on the Session Voice tracks, oldest first. */
+  speech?: HeardSpeech[];
+  /** When the latest phrase recent enough to cue a fill was heard (Unix ms). */
+  cueAt?: number;
+  /** Set when the player hasn't come in yet and would at this bar: should it start now instead? */
+  joinBar?: number;
   /** Varies the local rules' small random choices from bar to bar, reproducibly. */
   seed: number;
+}
+
+export interface HeardSpeech {
+  text: string;
+  trackName: string;
+  /** "this bar", "2 bars ago", "just before playback started". */
+  when: string;
 }
 
 export interface Decision {
@@ -26,6 +39,8 @@ export interface Decision {
   /** 1–10. */
   energy: number;
   fill: boolean;
+  /** For an early request (joinBar set): whether to come in now. Undefined means yes. */
+  join?: boolean;
   provider: string;
   confidence?: number;
   fallbackReason?: string;

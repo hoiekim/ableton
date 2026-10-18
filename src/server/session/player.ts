@@ -1,4 +1,4 @@
-import { DecisionLog, Instrument, PlayerState, PlayerStatus, TransportState } from "common";
+import { DecisionLog, Instrument, PlayerState, PlayerStatus, SpeechState, TransportState } from "common";
 import { BandAnalysis } from "./analyze";
 import { p90, slowest } from "./clock";
 import { SessionConfig } from "./config";
@@ -47,6 +47,8 @@ export interface PlayerDeps {
   timing: () => Timing;
   /** The musician's style direction; empty when none. */
   direction: () => string;
+  /** What was said or sung on the Session Voice tracks, newest first. */
+  speech: () => SpeechState[];
   onChange: () => void;
 }
 
@@ -84,6 +86,18 @@ const MIN_FIRE_MS = 25;
 const TICK_SLACK_MS = 20;
 /** Longest a decision request may take before it's abandoned. */
 const PROVIDER_TIMEOUT_MS = 10000;
+/** Phrases heard this many bars back (8 s at least) are told to the decision model. */
+const HEARD_BARS = 4;
+/** A phrase this recent (4 s at least) may ask for a fill outside a phrase's last bar. */
+const CUE_BARS = 2;
+const MAX_HEARD_LINES = 3;
+
+/** When a phrase was heard, for the decision model: "this bar", "2 bars ago". */
+const whenSaid = (said: SpeechState, timing: Timing) => {
+  if (!said.bar) return "just before playback started";
+  const ago = timing.bar - said.bar;
+  return ago <= 0 ? "this bar" : ago === 1 ? "last bar" : `${ago} bars ago`;
+};
 
 export const msUntilBar = (bar: number, timing: Timing) => {
   return ((bar - timing.bar) * timing.beatsPerBar - timing.beatInBar) * timing.msPerBeat;
@@ -124,6 +138,12 @@ export class Player {
   private decisionSamples: number[] = [];
   private writeSamples: number[] = [];
   private lastFillBar = -Infinity;
+  /** The latest phrase that brought the player in early, and the latest that got a cued fill. */
+  private joinCalledAt = 0;
+  private cueUsedAt = 0;
+  /** The bar the Join setting brings the player in at, and whether it has come in. */
+  private joinBar = 2;
+  private joined = false;
   private recent: DecisionLog[] = [];
   private decisions = 0;
   private misses = 0;
@@ -162,13 +182,17 @@ export class Player {
   start = () => {
     this.run++;
     this.status = "waiting";
-    this.nextBar = Math.max(2, this.settings.join + 1);
+    this.joinBar = Math.max(2, this.settings.join + 1);
+    this.joined = false;
+    this.nextBar = this.joinBar;
     this.pending.clear();
     this.committing = undefined;
     this.carry = undefined;
     this.playing = undefined;
     this.ring = undefined;
     this.lastFillBar = -Infinity;
+    this.joinCalledAt = 0;
+    this.cueUsedAt = 0;
   };
 
   /** Playback stopped; Live stops the clips itself. */
@@ -200,6 +224,7 @@ export class Player {
     // Decide each bar as late as the expected decision and write times allow.
     // Lookahead caps how early, and so how many decisions run at once.
     const lead = this.decisionLead() + this.writeEstimate() + this.deps.config.timing.fireMarginMs + TICK_SLACK_MS;
+    if (!this.playing) this.joinWhenCalled(timing, lead);
     const earliest = this.settings.lookahead * timing.beatsPerBar * timing.msPerBeat;
     while (this.pending.size < this.settings.lookahead && msUntilBar(this.nextBar, timing) <= Math.min(lead, earliest)) {
       const bar = this.nextBar;
@@ -244,6 +269,29 @@ export class Player {
     return `${provider.name} takes up to ${Math.round(this.decisionLead())} ms, so local rules decide; set Lookahead to ${bars} to use it`;
   };
 
+  /** Phrases heard within the last `bars` bars (and at least 2 s a bar), newest first. */
+  private heard = (timing: Timing, bars: number) => {
+    const window = Math.max(bars * timing.beatsPerBar * timing.msPerBeat, bars * 2000);
+    const now = Date.now();
+    return this.deps.speech().filter((said) => now - said.at <= window);
+  };
+
+  /**
+   * Someone spoke while the player waits to join ("ok, let's go"): decide for
+   * the first bar a decision can still make, and ask the decision model whether
+   * to come in now. Local rules don't read speech, so with them the player
+   * waits as set.
+   */
+  private joinWhenCalled = (timing: Timing, lead: number) => {
+    if (this.deps.provider.name === "local") return;
+    const said = this.heard(timing, HEARD_BARS)[0];
+    if (!said || said.at <= this.joinCalledAt) return;
+    this.joinCalledAt = said.at;
+    let bar = timing.bar + 1;
+    while (msUntilBar(bar, timing) < lead) bar++;
+    if (bar < this.nextBar) this.nextBar = bar;
+  };
+
   private decisionEstimate = () => p90(this.decisionSamples, this.deps.config.timing.initialDecisionMs);
 
   /**
@@ -274,6 +322,12 @@ export class Player {
         ? { pattern: this.playing.pattern, energy: this.playing.energy }
         : undefined;
     const barsSinceFill = Number.isFinite(this.lastFillBar) ? bar - this.lastFillBar - 1 : bar - 1;
+    const timing = this.deps.timing();
+    const speech = this.heard(timing, HEARD_BARS)
+      .slice(0, MAX_HEARD_LINES)
+      .reverse()
+      .map((said) => ({ text: said.text, trackName: said.trackName, when: whenSaid(said, timing) }));
+    const cue = this.heard(timing, CUE_BARS)[0];
     const state = describeState(analysis, transport(), {
       instrument,
       targetBar: bar,
@@ -283,6 +337,7 @@ export class Player {
       barsSinceFill,
       sound: this.profile?.summary,
       direction: this.deps.direction(),
+      speech,
     });
     return {
       instrument,
@@ -295,6 +350,10 @@ export class Player {
       barsSinceFill,
       energyOverride: energy === "auto" ? undefined : energy,
       direction: this.deps.direction(),
+      speech,
+      cueAt: cue?.at,
+      // Only a decision model reads speech, so only it is asked early.
+      joinBar: this.deps.provider.name !== "local" && !this.joined && bar < this.joinBar ? this.joinBar : undefined,
       seed: hashString(`${this.settings.trackId}:${bar}`),
     };
   };
@@ -319,6 +378,7 @@ export class Player {
         return;
       }
       this.decisions++;
+      if (request.joinBar !== undefined && decision.join !== true) return this.waitToJoin(bar, request, decision, performance.now() - started);
       entry.prepared = { bar, decision, request, decisionMs: performance.now() - started };
       // Write right away rather than on the next tick.
       this.commitNext(this.deps.timing());
@@ -328,6 +388,30 @@ export class Player {
     } finally {
       this.deps.onChange();
     }
+  };
+
+  /**
+   * Asked early, the decision model chose not to come in yet: wait for the Join
+   * bar, or the next phrase heard. Without its answer (too slow, or failed),
+   * ask again for the bar after.
+   */
+  private waitToJoin = (bar: number, request: DecisionRequest, decision: Decision, decisionMs: number) => {
+    this.pending.delete(bar);
+    if (decision.join === false) this.nextBar = Math.max(this.nextBar, request.joinBar!);
+    this.remember({
+      bar,
+      pattern: "–",
+      energy: decision.energy,
+      fill: false,
+      chords: [],
+      provider: decision.provider,
+      confidence: decision.confidence,
+      fallbackReason: decision.join === undefined ? `No answer on coming in early${decision.fallbackReason ? `: ${decision.fallbackReason}` : ""}` : undefined,
+      decisionMs: Math.round(decisionMs),
+      marginMs: Math.round(msUntilBar(bar, this.deps.timing())),
+      outcome: "waited",
+      state: request.state,
+    });
   };
 
   /** Writes the earliest pending bar once it's decided and the last clip has started. */
@@ -394,9 +478,11 @@ export class Player {
       patterns.find((p) => p.id === decideLocally(request).pattern) ??
       patterns[0];
     const { chords, next } = this.chordsFor(bar, request.analysis);
-    // Fills belong in the last bar of a phrase, leading into the next one.
+    // Fills belong in the last bar of a phrase, leading into the next one,
+    // unless someone just asked for a cue: then one may come right away.
     const endsPhrase = (bar + length - 1) % config.phraseLength === 0;
-    const fill = decision.fill && endsPhrase && bar - this.lastFillBar >= 2;
+    const cued = request.cueAt !== undefined && request.cueAt > this.cueUsedAt;
+    const fill = decision.fill && (endsPhrase || cued) && bar - this.lastFillBar >= 2;
     const accent = !!this.playing?.fill && this.role() === "drums";
     const signature = [pattern.id, decision.energy, chords.map((c) => c.symbol).join(","), fill, accent, length].join("|");
 
@@ -419,6 +505,7 @@ export class Player {
       // Same notes as the looping clip, lined up with its loop: let it play on.
       const playing = this.playing;
       if (playing && playing.signature === signature && (bar - playing.bar) % playing.length === 0) {
+        this.joined = true;
         log.marginMs = Math.round(msUntilBar(bar, this.deps.timing()));
         this.remember(log);
         return;
@@ -456,7 +543,9 @@ export class Player {
       await ops.fireClip(clipId);
       if (run !== this.run) return;
       this.playing = { bar, length, pattern: pattern.id, energy: decision.energy, fill, slotIndex: slot.index, signature };
+      this.joined = true;
       if (fill) this.lastFillBar = bar + length - 1;
+      if (fill && !endsPhrase) this.cueUsedAt = request.cueAt!;
       this.setStatus("playing");
       this.remember({ ...log, outcome: "fired", marginMs: Math.round(margin), clipName });
     } catch (error) {

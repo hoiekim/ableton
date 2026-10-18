@@ -27,6 +27,9 @@ const parseMessage = (data: string): ClientMessage | undefined => {
   try {
     const message = JSON.parse(data);
     if (message?.type === "command" && isTransportCommand(message.command)) return message;
+    if (message?.type === "listen" && Number.isInteger(message.trackId) && typeof message.on === "boolean") {
+      return { type: "listen", trackId: message.trackId, on: message.on };
+    }
     if (message?.type === "direction" && typeof message.text === "string") {
       return { type: "direction", text: message.text.trim().slice(0, MAX_DIRECTION_LENGTH) };
     }
@@ -39,6 +42,7 @@ const parseMessage = (data: string): ClientMessage | undefined => {
 export interface SocketHandlers {
   onCommand: (command: TransportCommand) => void;
   onDirection: (text: string) => void;
+  onListen: (trackId: number, on: boolean) => void;
 }
 
 /**
@@ -47,7 +51,7 @@ export interface SocketHandlers {
  */
 export const createSocketHandler = (
   store: LiveStore,
-  { onCommand, onDirection }: SocketHandlers
+  { onCommand, onDirection, onListen }: SocketHandlers
 ): WebSocketHandler => {
   const sockets = new Set<ServerWebSocket>();
   const changes = new Set<ClientChange>();
@@ -77,6 +81,7 @@ export const createSocketHandler = (
       const message = parseMessage(data.toString());
       if (message?.type === "command") onCommand(message.command);
       if (message?.type === "direction") onDirection(message.text);
+      if (message?.type === "listen") onListen(message.trackId, message.on);
     },
     close: (socket) => {
       sockets.delete(socket);

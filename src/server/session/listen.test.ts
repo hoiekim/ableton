@@ -20,6 +20,13 @@ describe("parseOsc", () => {
     expect(message).toEqual({ type: "note", deviceId: 12, pitch: 60, velocity: 100, beat: 4 });
   });
 
+  test("reads a Session Voice take by number, never a path", () => {
+    const take = parseOsc(packet("/sp/voice", [{ type: "integer", value: 7 }, { type: "integer", value: 3 }]));
+    expect(take).toEqual({ type: "voice", deviceId: 7, take: 3 });
+    expect(parseOsc(packet("/sp/voice", [{ type: "integer", value: 7 }, { type: "string", value: "/etc/hosts" }]))).toBeUndefined();
+    expect(parseOsc(packet("/sp/voice", [{ type: "integer", value: 7 }, { type: "float", value: 1.5 }]))).toBeUndefined();
+  });
+
   test("reads pitch readings and onsets from audio inputs", () => {
     const reading = parseOsc(
       packet("/sp/pitch", [

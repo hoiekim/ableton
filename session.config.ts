@@ -21,6 +21,11 @@ const config: UserSessionConfig = {
   },
   slots: 4,
   phraseLength: 4,
+  // Speech-to-text for Session Voice: whisper.cpp's server, started when a Session Voice is in the set.
+  voice: {
+    model: "models/ggml-base.en.bin",
+    port: 9103,
+  },
   patterns: {},
 };
 

@@ -14,6 +14,7 @@ interface JevAnswers {
   pattern: { choice: string; confidence: number };
   energy?: { score: number };
   fill: { noul: number };
+  join?: { noul: number };
 }
 
 const ENERGY_LEVELS = [
@@ -32,7 +33,14 @@ const ENERGY_LEVELS = [
 /** The questions sent to Jev for one decision. */
 export const buildQuestions = (request: DecisionRequest, config: SessionConfig["jev"]) => {
   const direction = request.direction ? `The musician wants: "${request.direction}". Follow it.` : "";
-  const preamble = [config.instructions, direction].filter(Boolean).map((line) => `${line}\n`).join("");
+  const heard = request.speech?.length
+    ? 'Someone in the band just spoke or sang (the "Heard on" lines). If it\'s meant for the band, like a count-in, a cue, "take it down" or "let\'s go", do what it asks. If it\'s lyrics, fit their mood.'
+    : "";
+  const preamble = [config.instructions, direction, heard].filter(Boolean).map((line) => `${line}\n`).join("");
+  const fillRule =
+    request.cueAt !== undefined
+      ? "A fill cues the band into what comes next: play one now if someone just asked for a cue, a fill or a change; otherwise only in the last bar of a phrase."
+      : "Fills go in the last bar of a phrase, leading into the next phrase or a new section; never in a bar that starts a phrase.";
   const criteria: Record<string, string> = Object.fromEntries(request.patterns.map((p) => [p.id, p.description]));
   if (request.previous) criteria[HOLD] = HOLD_DESCRIPTION;
   return {
@@ -50,8 +58,16 @@ export const buildQuestions = (request: DecisionRequest, config: SessionConfig["
     }),
     fill: {
       type: "noul",
-      instructions: `${preamble}Play a fill in the next bar. Fills go in the last bar of a phrase, leading into the next phrase or a new section; never in a bar that starts a phrase.`,
+      instructions: `${preamble}Play a fill in the next bar. ${fillRule}`,
     },
+    ...(request.joinBar !== undefined && {
+      join: {
+        type: "noul",
+        instructions:
+          `${preamble}You haven't started playing yet; you're set to come in at bar ${request.joinBar}. Start playing in the next bar instead. ` +
+          "Start if someone just told the band to go, counted in, or asked you to come in; wait if they only asked whether everyone is ready, or said something else.",
+      },
+    }),
   };
 };
 
@@ -80,15 +96,16 @@ export const createJevProvider = (config: SessionConfig["jev"], fetch: Fetch = g
     const { choice, confidence } = answers.pattern;
     const energy = request.energyOverride ?? clamp(Math.round((answers.energy?.score ?? 4) + 1), 1, 10);
     const fill = answers.fill.noul >= 0.5;
+    const join = request.joinBar !== undefined && answers.join ? answers.join.noul >= 0.5 : undefined;
 
     if (confidence < config.minConfidence) {
-      return { ...decideLocally(request), fill, fallbackReason: `Jev was unsure (${confidence.toFixed(2)})` };
+      return { ...decideLocally(request), fill, join, fallbackReason: `Jev was unsure (${confidence.toFixed(2)})` };
     }
     // "hold" keeps the previous part, re-rendered for the next chord.
-    if (choice === HOLD && request.previous) return { ...request.previous, fill, provider: "jev", confidence };
+    if (choice === HOLD && request.previous) return { ...request.previous, fill, join, provider: "jev", confidence };
     if (!request.patterns.some((pattern) => pattern.id === choice)) {
-      return { ...decideLocally(request), fill, fallbackReason: `Jev chose an unknown pattern "${choice}"` };
+      return { ...decideLocally(request), fill, join, fallbackReason: `Jev chose an unknown pattern "${choice}"` };
     }
-    return { pattern: choice, energy, fill, provider: "jev", confidence };
+    return { pattern: choice, energy, fill, join, provider: "jev", confidence };
   },
 });

@@ -16,11 +16,12 @@ const deviceTypeLabels: Record<DeviceType, string> = {
   undefined: "Device",
 };
 
-/** "Session Player · Bass" or "Session Input · Chords", from the device's parameters. */
+/** "Session Player · Bass", "Session Input · Chords" or "Session Voice · On", from the device's parameters. */
 const sessionLabel = (device: DeviceState) => {
   const { session } = device;
   if (!session) return undefined;
   if (session.kind === "player") return `Session Player · ${session.params["SP Instrument"]?.label ?? ""}`;
+  if (session.kind === "voice") return `Session Voice · ${(session.params["SPV On"]?.value ?? 1) >= 1 ? "On" : "Off"}`;
   return `Session Input · ${session.params["SPI Role"]?.label ?? ""}`;
 };
 
@@ -50,7 +51,35 @@ const Flag = ({ label, title, on }: { label: string; title: string; on: boolean 
   </span>
 );
 
-export const TrackRow = ({ track }: { track: TrackState }) => {
+/**
+ * Whether the Session Players hear this track: the On switch of its Session
+ * Input and Session Voice devices. Tracks without one can't be heard until it's added.
+ */
+const ListenSwitch = ({ track, onListen }: { track: TrackState; onListen: (trackId: number, on: boolean) => void }) => {
+  if (track.type === "return" || track.type === "master" || track.type === "group") return null;
+  if (track.devices.some((device) => device.session?.kind === "player")) return <span className="listenNote">AI player</span>;
+  const listeners = track.devices.filter((device) => device.session?.kind === "input" || device.session?.kind === "voice");
+  if (!listeners.length) {
+    return (
+      <label className="listen unavailable" title="Add Session Input (or Session Voice) as the first device on this track to let the players hear it.">
+        <input type="checkbox" disabled checked={false} readOnly />
+        <span>Listen</span>
+      </label>
+    );
+  }
+  const on = listeners.every((device) => {
+    const param = device.session!.kind === "voice" ? "SPV On" : "SPI On";
+    return device.isActive && (device.session!.params[param]?.value ?? 1) >= 1;
+  });
+  return (
+    <label className="listen" title={on ? "The Session Players hear this track" : "The Session Players ignore this track"}>
+      <input type="checkbox" checked={on} onChange={(event) => onListen(track.id, event.target.checked)} />
+      <span>Listen</span>
+    </label>
+  );
+};
+
+export const TrackRow = ({ track, onListen }: { track: TrackState; onListen: (trackId: number, on: boolean) => void }) => {
   const { name, type, color, mute, solo, arm, devices } = track;
   const style = { "--track-color": color } as React.CSSProperties;
   return (
@@ -67,6 +96,7 @@ export const TrackRow = ({ track }: { track: TrackState }) => {
             </span>
           )}
         </span>
+        <ListenSwitch track={track} onListen={onListen} />
       </div>
       <ol className="devices">
         {devices.length ? (

@@ -4,9 +4,10 @@
  *   bun run build:devices
  *
  * The devices are deliberately thin: Session Player only holds settings (as
- * Live parameters the server reads through the Live API), and the two Session
- * Input devices forward what a track plays to the server over OSC/UDP. All the
- * logic lives in the server, where it can be tested.
+ * Live parameters the server reads through the Live API), the two Session
+ * Input devices forward what a track plays to the server over OSC/UDP, and
+ * Session Voice records each sung or spoken phrase to a file for the server to
+ * transcribe. All the logic lives in the server, where it can be tested.
  *
  * Each device is described here as Max boxes and patch cords, written out as an
  * unfrozen .amxd: an "ampf" chunk with the device type, a "meta" chunk, and a
@@ -101,7 +102,7 @@ const patch = () => {
 
   const connect = (...cord: Cord) => cords.push(cord);
 
-  return { boxes, cords, object, message, comment, control, connect };
+  return { boxes, cords, add, object, message, comment, control, connect };
 };
 
 type Patch = ReturnType<typeof patch>;
@@ -132,7 +133,8 @@ const onOff = (p: Patch, longname: string, presentation: Rect) =>
 
 /**
  * Looks up the device's own Live API id once it's loaded, and keeps the OSC
- * messages' leading arguments ("/sp/note <id>", ...) set to it.
+ * messages' leading arguments ("/sp/note <id>", ...) set to it. Returns the box
+ * that puts the id out, for anything else that needs it.
  */
 const deviceId = (p: Patch, targets: { prefix: Box; address: string }[], hello: Box) => {
   const thisDevice = p.object("live.thisdevice", 1, ["bang", "int", "int"]);
@@ -146,10 +148,11 @@ const deviceId = (p: Patch, targets: { prefix: Box; address: string }[], hello: 
     p.connect(set, 0, prefix, 0);
   }
   p.connect(id, 0, hello, 0);
+  return id;
 };
 
 /** "/sp/hello <id> <kind>" every 2 seconds, so the server can show the input as connected. */
-const heartbeat = (p: Patch, kind: "midi" | "audio", udp: Box) => {
+const heartbeat = (p: Patch, kind: "midi" | "audio" | "voice", udp: Box) => {
   const kindArg = p.object(`append ${kind}`, 2, [""]);
   const set = p.object("prepend set /sp/hello", 2, [""]);
   const text = p.message(`/sp/hello 0 ${kind}`);
@@ -317,6 +320,154 @@ const sessionInputAudio = () => {
   return { name: "Session Input Audio", type: AUDIO_EFFECT, patch: p };
 };
 
+/**
+ * Records each sung or spoken phrase on its track for the server to transcribe.
+ * A level gate finds the phrases: louder than the threshold starts a take, and
+ * 700 ms under it ends one (a take is cut at 10 s). Each take is recorded
+ * with 300 ms from before it started, to keep the first syllable, into
+ * /tmp/session-voice-<id>-<take>.wav; then "/sp/voice <id> <take>" tells the
+ * server it's ready. The next take's file is opened as soon as one ends.
+ */
+const sessionVoice = () => {
+  const p = patch();
+  const input = p.object("plugin~", 2, ["signal", "signal"]);
+  const output = p.object("plugout~", 2, ["signal", "signal"]);
+  p.connect(input, 0, output, 0);
+  p.connect(input, 1, output, 1);
+
+  p.comment("Session Voice", [8, 4, 120, 18], { fontsize: 12, fontface: 1 });
+  const on = onOff(p, "SPV On", [8, 28, 44, 18]);
+  const threshold = p.control(
+    "live.dial",
+    "SPV Threshold",
+    { parameter_type: 0, parameter_mmin: -70, parameter_mmax: 0, parameter_initial: [-35], parameter_unitstyle: 4 },
+    [128, 26, 44, 40],
+    { annotation: "Louder than this counts as someone singing or speaking. Set it just above the band's spill into the mic.", showname: 0 }
+  );
+  p.comment("Threshold", [124, 66, 56, 18]);
+  const meter = p.add({ maxclass: "live.meter~", numinlets: 1, numoutlets: 1, outlettype: ["list"], presentation: 1, presentation_rect: [184, 26, 8, 54] });
+  const light = p.add({
+    maxclass: "led",
+    numinlets: 1,
+    numoutlets: 1,
+    outlettype: ["int"],
+    ignoreclick: 1,
+    presentation: 1,
+    presentation_rect: [60, 28, 18, 18],
+  });
+  p.comment("hearing", [78, 28, 46, 18], { textcolor: [0.6, 0.6, 0.63, 1] });
+  p.comment("Words go to the players. Put first on the vocal track.", [8, 84, 200, 30], { textcolor: [0.6, 0.6, 0.63, 1] });
+
+  // One mono signal for the level and the recording.
+  const sum = p.object("+~", 2, ["signal"]);
+  const half = p.object("*~ 0.5", 2, ["signal"]);
+  p.connect(input, 0, sum, 0);
+  p.connect(input, 1, sum, 1);
+  p.connect(sum, 0, half, 0);
+  p.connect(half, 0, meter, 0);
+
+  // Every 20 ms: is it louder than the threshold?
+  const rms = p.object("average~ 1024 rms", 1, ["signal"]);
+  const level = p.object("snapshot~ 20", 2, ["float"]);
+  const db = p.object("atodb", 1, ["float"]);
+  const loud = p.object("> -35.", 2, ["int"]);
+  const listening = p.object("gate 1 1", 2, [""]);
+  const voiced = p.object("change", 1, ["", "int", "int"]);
+  const voicedNow = p.object("i", 2, ["int"]);
+  const voicedEdge = p.object("sel 1 0", 1, ["bang", "bang", ""]);
+  p.connect(half, 0, rms, 0);
+  p.connect(rms, 0, level, 0);
+  p.connect(level, 0, db, 0);
+  p.connect(db, 0, loud, 0);
+  p.connect(threshold, 0, loud, 1);
+  p.connect(on, 0, listening, 0);
+  p.connect(loud, 0, listening, 1);
+  p.connect(listening, 0, voiced, 0);
+  p.connect(voiced, 0, voicedNow, 1);
+  p.connect(voiced, 0, voicedEdge, 0);
+
+  // A take runs from the first loud moment to 700 ms of quiet; "change" ignores repeats.
+  const take = p.object("change 0", 1, ["", "int", "int"]);
+  const takeOn = p.message("1");
+  const takeOff = p.message("0");
+  const hangover = p.object("delay 700", 2, ["bang"]);
+  const startVoice = p.object("t b b", 1, ["bang", "bang"]);
+  const stopHangover = p.message("stop");
+  p.connect(voicedEdge, 0, startVoice, 0);
+  p.connect(startVoice, 1, stopHangover, 0);
+  p.connect(stopHangover, 0, hangover, 0);
+  p.connect(startVoice, 0, takeOn, 0);
+  p.connect(voicedEdge, 1, hangover, 0);
+  p.connect(hangover, 0, takeOff, 0);
+  p.connect(takeOn, 0, take, 0);
+  p.connect(takeOff, 0, take, 0);
+  p.connect(take, 0, light, 0);
+  // Switching off ends the take in progress.
+  const off = p.object("sel 0", 2, ["bang", ""]);
+  p.connect(on, 0, off, 0);
+  p.connect(off, 0, takeOff, 0);
+
+  // Recording, 300 ms behind the level gate so a take keeps its first syllable.
+  const preroll = p.object("delay~ 48000 14400", 2, ["signal"]);
+  const recorder = p.object("sfrecord~ 1", 1, ["signal"]);
+  const record = p.message("1");
+  const finish = p.message("0");
+  p.connect(half, 0, preroll, 0);
+  p.connect(preroll, 0, recorder, 0);
+  p.connect(record, 0, recorder, 0);
+  p.connect(finish, 0, recorder, 0);
+
+  // Takes are cut at 10 s; one still going on carries on in a new take.
+  const cap = p.object("delay 10000", 2, ["bang"]);
+  const stopCap = p.message("stop");
+  const capped = p.object("t b b", 1, ["bang", "bang"]);
+  const stillVoiced = p.object("sel 1", 2, ["bang", ""]);
+  p.connect(stopCap, 0, cap, 0);
+  p.connect(cap, 0, capped, 0);
+  p.connect(capped, 1, takeOff, 0);
+  p.connect(capped, 0, voicedNow, 0);
+  p.connect(voicedNow, 0, stillVoiced, 0);
+  p.connect(stillVoiced, 0, takeOn, 0);
+
+  const edges = p.object("sel 1 0", 1, ["bang", "bang", ""]);
+  const begin = p.object("t b b", 1, ["bang", "bang"]);
+  const end = p.object("t b b b", 1, ["bang", "bang", "bang"]);
+  p.connect(take, 0, edges, 0);
+  p.connect(edges, 0, begin, 0);
+  p.connect(begin, 1, cap, 0);
+  p.connect(begin, 0, record, 0);
+  p.connect(edges, 1, end, 0);
+
+  // A take ends: close its file, tell the server its number, open the next one.
+  const current = p.object("i", 2, ["int"]);
+  const voicePrefix = p.object("prepend /sp/voice 0", 2, [""]);
+  const udp = p.object(`udpsend 127.0.0.1 ${OSC_PORT}`, 1, []);
+  const counter = p.object("counter 1 1000000", 3, ["int", "", "", "int"]);
+  const nextTake = p.object("t b i i", 1, ["bang", "int", "int"]);
+  const fileArgs = p.object("pack 0 0", 2, [""]);
+  const fileName = p.object("sprintf /tmp/session-voice-%ld-%ld.wav", 2, [""]);
+  const open = p.object("prepend open", 2, [""]);
+  p.connect(end, 2, finish, 0);
+  p.connect(end, 2, stopCap, 0);
+  p.connect(end, 1, current, 0);
+  p.connect(current, 0, voicePrefix, 0);
+  p.connect(voicePrefix, 0, udp, 0);
+  p.connect(end, 0, counter, 0);
+  p.connect(counter, 0, nextTake, 0);
+  p.connect(nextTake, 2, current, 1);
+  p.connect(nextTake, 1, fileArgs, 1);
+  p.connect(nextTake, 0, fileArgs, 0);
+  p.connect(fileArgs, 0, fileName, 0);
+  p.connect(fileName, 0, open, 0);
+  p.connect(open, 0, recorder, 0);
+
+  const hello = heartbeat(p, "voice", udp);
+  // Once the id is known, take 0's file is opened, ready for the first phrase.
+  const id = deviceId(p, [{ prefix: voicePrefix, address: "/sp/voice" }], hello);
+  p.connect(id, 0, fileArgs, 0);
+  return { name: "Session Voice", type: AUDIO_EFFECT, patch: p };
+};
+
 /** Patch cords must start at an outlet and end at an inlet the boxes really have. */
 const validate = (name: string, { boxes, cords }: Patch) => {
   for (const [from, outlet, to, inlet] of cords) {
@@ -429,7 +580,7 @@ const readAmxd = (bytes: Uint8Array) => {
 };
 
 fs.mkdirSync(OUT, { recursive: true });
-for (const device of [sessionPlayer(), sessionInput(), sessionInputAudio()]) {
+for (const device of [sessionPlayer(), sessionInput(), sessionInputAudio(), sessionVoice()]) {
   validate(device.name, device.patch);
   const json = JSON.stringify(toPatcher(device.name, device.type, device.patch), null, "\t");
   const bytes = toAmxd(json, device.type);

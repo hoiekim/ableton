@@ -31,7 +31,9 @@ Bun server:  listen -> cut into bars -> analyze (chords, key, loop, rhythm, ener
              -> decide (local rules or Jev: pattern, energy, fill) -> render on the upcoming chords
              -> write a clip into the player track's slot ring and fire it, through the LiveAPI.amxd bridge
 Player track:  [Session Player] (settings as Live parameters) -> instrument; Live starts the clip on the bar
-Web page:      Session panel with each decision, its timing and the text the model saw
+Vocal track:   [Session Voice] records each phrase to /tmp -> OSC "take ready" -> whisper-server (local) -> text
+               -> recent phrases join the state text; Jev is also asked whether to come in early
+Web page:      Session panel with each decision, its timing and the text the model saw; Listen switch per track
 ```
 
 ### Devices
@@ -48,6 +50,7 @@ its long name, so either one matches.
 | Session Player | MIDI effect, before the player's instrument | `SP Instrument` (Drums/Bass/Keys/Guitar/Auto; Auto is last so older devices keep their setting), `SP Active`, `SP Lookahead` (1–4 bars), `SP Length` (1/2/4-bar clips), `SP Join` (bars to listen first), `SP Energy` (Auto or 1–10) | nothing; the server reads and observes the parameters through the Live API |
 | Session Input | MIDI effect, first on a source MIDI track | `SPI Role` (Auto/Bass/Chords/Melody/Drums), `SPI On` | every note-on/off |
 | Session Input Audio | audio effect, first on a source audio track | `SPI Role`, `SPI On`, `SPI Threshold` (dB) | `fzero~` readings every 10 ms, and onsets |
+| Session Voice | audio effect, first on a vocal track | `SPV On`, `SPV Threshold` (dB, default −35) | each phrase's take number, once its file is written |
 
 ### OSC messages (UDP 127.0.0.1:9101)
 
@@ -60,7 +63,8 @@ its track.
 | `/sp/note` | deviceId, pitch, velocity (0 = off), ticks | Session Input |
 | `/sp/pitch` | deviceId, hz, amplitude, ticks | Session Input Audio |
 | `/sp/onset` | deviceId, ticks | Session Input Audio |
-| `/sp/hello` | deviceId, `midi` or `audio` | both, every 2 s |
+| `/sp/voice` | deviceId, take | Session Voice, when take's file is closed |
+| `/sp/hello` | deviceId, `midi`, `audio` or `voice` | every device, every 2 s |
 
 ### Server modules ([src/server/session](../src/server/session))
 
@@ -74,6 +78,7 @@ its track.
 | `patterns/` | The pattern library and its renderers. |
 | `providers/` | `local.ts` (rules) and `jev.ts`, behind one `DecisionProvider` interface. |
 | `player.ts` | The scheduler: when to decide, writing and firing clips, misses, latency learning. |
+| `voice.ts` | Speech to text: starts whisper-server, waits for each take's file to be written, transcribes it, filters noise, deletes the file. |
 | `config.ts` | Defaults, merged with [session.config.ts](../session.config.ts) and environment variables. |
 | [live.ts](../src/server/live.ts) | Bridge additions: Session device parameters, and clip operations (`clipSlots`, `writeClip`, `fireClip`, `stopTrack`). |
 
@@ -187,7 +192,9 @@ decision model knows what it is playing.
 - **Learning latency.** A slow model's request is never abandoned at the
   deadline. Local rules answer in its place, but the real duration is
   recorded, so the next decision starts early enough. With a 1.5 s model at
-  120 BPM, Jev decided every bar from the third bar on.
+  120 BPM, Jev decided every bar from the third bar on. Until 5 decision times
+  are known, the lead never goes below the configured starting estimate
+  (450 ms): one quick first answer says little about the next.
 
 ## Style direction
 
@@ -201,6 +208,54 @@ engine, and used from the next decision on:
   that genre's patterns strongly enough to beat sticking with the current one,
   and mood words move energy by ±2.
 
+## Voice
+
+Session Voice lets the singer talk to the players. Everything said or sung goes
+to Jev as text and Jev decides what to do with it; there are no cue words in
+code, and the local rules ignore speech.
+
+- **Recording (in Max):** a level gate on the track's audio (RMS every 20 ms,
+  against `SPV Threshold`) finds phrases. A phrase starts when the level crosses
+  the threshold and ends after 700 ms below it; phrases are cut at 10 s, and one
+  still going on continues in a new take. `sfrecord~` records through a 300 ms
+  delay, so the first syllable is kept, into
+  `/tmp/session-voice-<deviceId>-<take>.wav`. When a take ends the file is
+  closed, `/sp/voice <deviceId> <take>` is sent, and the next take's file is
+  opened.
+- **Paths are never sent.** The server builds the path from the two integers,
+  so nothing on the network can make it read or delete other files.
+- **Transcribing (on the server):** `voice.ts` starts whisper.cpp's
+  `whisper-server` with `ggml-base.en` when the first Session Voice device shows
+  up, or uses one already listening on the port. It waits for the file's size
+  to settle, posts it, and keeps segments Whisper is confident are speech
+  (no-speech probability ≤ 0.6, average log probability ≥ −1). It strips sound
+  tags such as `[BLANK_AUDIO]` and `(music)`, and drops Whisper's stock phrases
+  for noise ("thanks for watching", a lone "you"). whisper-server 1.9 reads WAV
+  at any rate itself, so ffmpeg isn't needed. A device that wrote AIFF would be
+  converted with `afconvert`.
+- **Latency:** about 1 s from the end of a phrase (700 ms hangover, file
+  settling, ~0.2–0.3 s to transcribe a few seconds on an M2). At 120 BPM with
+  Lookahead 1, a phrase that ends in the first half of a bar usually reaches the
+  next bar's decision, and a later one the bar after.
+- **What Jev reads:** phrases from the last 4 bars (8 s at least) appear after
+  the style direction, as `Heard on Vocals last bar: "ok let's go, give me a
+  cue"`. Phrases heard while stopped say "just before playback started". Every
+  question then begins: if it's meant for the band (a count-in, a cue, "take
+  it down", "let's go"), do what it asks; if it's lyrics, fit their mood.
+- **Coming in early:** while a player waits for its Join bar, a new phrase makes
+  it decide for the first bar a decision can still make, with an extra yes/no
+  question: start playing in the next bar? A no waits for the Join bar again (or
+  the next phrase). No answer in time (too slow, or an error) asks again for the
+  following bar, so a slow reply doesn't throw away "let's go". This only happens
+  with a decision model; the local rules can't read speech.
+- **Cued fills:** fills normally only go in a phrase's last bar. For 2 bars
+  (4 s at least) after a phrase, the fill question says to play one now if
+  someone asked for a cue, and a fill outside the phrase end is allowed, once
+  per phrase.
+- **Listen switch:** the web page's per-track switch sets `SPI On` and `SPV On`
+  through the bridge (`setSessionParam`), so Live keeps the setting and the
+  devices stop sending. The server also ignores takes from a voice that's off.
+
 ## Programmability
 
 - **Settings:** [session.config.ts](../session.config.ts) holds the provider
@@ -212,25 +267,40 @@ engine, and used from the next decision on:
   description is what the decision model chooses by.
 - **New decision models:** another one is a `DecisionProvider` with a
   `decide(request, { timeoutMs })` method.
+- **Voice:** `voice` in the config sets the whisper-server program, the model,
+  its port (9103) and the confidence floor for transcripts.
 - **Environment:** `TYPESAFE_API_KEY` (read from `.env`), `TYPESAFE_BASE_URL`,
-  `SESSION_PROVIDER`, `SESSION_OSC_PORT`.
+  `SESSION_PROVIDER`, `SESSION_OSC_PORT`, `SESSION_WHISPER_PORT`,
+  `SESSION_WHISPER_MODEL`.
 
 ## Verification
 
-- **Unit tests** (`bun test`, 81 tests):
+- **Unit tests** (`bun test`, 160 tests):
   - chord, key and loop detection
   - every pattern rendering valid notes on the chord
   - OSC decoding and bar cutting
   - audio note detection
   - the scheduler on a fake clock: firing on time, ring slots, kept clips, stopped transport, slow models cut off, late writes not fired, switching off
-  - Jev request shape against a fake `fetch`
+  - Jev request shape against a fake `fetch`, including the speech, cue and join questions
+  - transcripts: noise filtering, WAV length while a file is still being written, take messages carrying no paths
+  - speech in the scheduler: joining early (or waiting) on what Jev answers, asking again without an answer, one cued fill per phrase
 - **End to end against the mock bridge** (`bun run mock`):
   - The mock includes clips, launch-quantized playback, device parameters, and a scripted band on Bass, Keys and Vocals. The Vocals part arrives as pitch readings.
   - At 80, 120 and 160 BPM: no missed bars, clips in place about 150 ms or more before their bar, and the guitar's chords matched the band from bar 6 on.
 - **Real Jev on the mock band:**
   - All decisions came from Jev, in 60–190 ms, with no missed bars.
   - Testing found two problems, both fixed: early-played straight eighths were described as syncopated (grid rounding), and Jev asked for fills in bars that start a phrase (fills are now gated to phrase ends).
-- **Not yet verified in Ableton Live itself.**
+- **Voice, against the mock with real Whisper and Jev:** the mock's `say` action
+  records a take with macOS's `say` where Session Voice would.
+  - Each phrase was transcribed correctly about 1 s after `say` was called.
+  - "Are you ready?" before Play: Jev chose not to bring in the guitar early (set to join at bar 5).
+  - "Ok, let's go. Give me a cue." in bar 2: the guitar came in at bar 3, with a fill.
+  - "Take it down, nice and quiet." in bar 6: by bar 8 the drums played `sparse` and the guitar `ballad-strum`, both at energy 3.
+  - The Listen switch turned both of Vocals' devices off and on through the bridge; a take while off wasn't recorded.
+  - whisper-server stopped with the server.
+- **Not yet verified in Ableton Live itself**, including the Session Voice
+  patch: its level gate, `sfrecord~` file handling and `sprintf` path have only
+  been checked for valid connections, not run in Max.
 
 ## Known limits
 
@@ -241,10 +311,12 @@ engine, and used from the next decision on:
 - A Drum Rack inside an Instrument Rack can't report which note plays which sound in Live 11; the standard layout is assumed.
 - A synth's sound is judged from names and its amp envelope only; a preset with an uninformative name and an unusual envelope may be described vaguely.
 - The bridge (LiveAPI.amxd) logs every call to Max's console, and asking for `value_items` on non-enum parameters logs errors there; both are harmless.
+- Session Voice's gate is level-only: the band's spill into the vocal mic above the threshold makes takes too, and Whisper may make words out of them. Set the threshold with the meter.
+- Sung words transcribe less reliably than speech, and the base English model only understands English.
+- Speech reaches the players about a second after a phrase ends, so a cue lands a bar or two later, not on the next beat.
 
 ## Later
 
-- **Next chord from clips:** read the notes of the band's playing clips to know the next bar's chord for sure. In progress.
 - **Chords from audio:** detect chords from polyphonic audio (chroma, or basic-pitch about a bar behind).
 - **Your clips as options:** let your own clips in the player's track become candidates the model can choose.
 - **Generated options:** candidates from generative models (magenta.js, MIDI-GPT).

@@ -49,3 +49,24 @@ describe("describeState", () => {
     expect(describeState(analysis, transport, player)).toContain("Chord for the next bar: Am7 (a guess: the last chord continuing).");
   });
 });
+
+describe("describeState with speech", () => {
+  test("tells the decision model what was just said, after the direction", () => {
+    const text = describeState(analyzeBand([]), initialTransport, {
+      instrument: "drums",
+      targetBar: 6,
+      phraseLength: 4,
+      barsSinceFill: 2,
+      direction: "punk",
+      speech: [
+        { text: "Are you ready?", trackName: "Vocals", when: "just before playback started" },
+        { text: "ok let's go, give me a cue", trackName: "Vocals", when: "last bar" },
+      ],
+    });
+    expect(text.split("\n").slice(0, 3)).toEqual([
+      'The musician wants: "punk".',
+      'Heard on Vocals just before playback started: "Are you ready?"',
+      'Heard on Vocals last bar: "ok let\'s go, give me a cue"',
+    ]);
+  });
+});
