@@ -1,4 +1,5 @@
 import React from "react";
+import { SessionPanel } from "./SessionPanel";
 import { Connection, Transport } from "./Transport";
 import { TrackRow } from "./TrackRow";
 import { useLiveSocket } from "./useLiveSocket";
@@ -33,6 +34,7 @@ export const App = () => {
         disabled={status !== "connected"}
         onCommand={sendCommand}
       />
+      {status === "connected" && <SessionPanel session={state.session} />}
       <main className="tracks">
         {tracks.map((track) => (
           <TrackRow key={track.id} track={track} />

@@ -16,13 +16,26 @@ const deviceTypeLabels: Record<DeviceType, string> = {
   undefined: "Device",
 };
 
+/** "Session Player · Bass" or "Session Input · Chords", from the device's parameters. */
+const sessionLabel = (device: DeviceState) => {
+  const { session } = device;
+  if (!session) return undefined;
+  if (session.kind === "player") return `Session Player · ${session.params["SP Instrument"]?.label ?? ""}`;
+  return `Session Input · ${session.params["SPI Role"]?.label ?? ""}`;
+};
+
 const DeviceCard = ({ device }: { device: DeviceState }) => {
   const { name, classDisplayName, type, isActive } = device;
-  const className = ["DeviceCard", type, isActive ? "" : "inactive"].filter(Boolean).join(" ");
+  const session = sessionLabel(device);
+  const className = ["DeviceCard", type, isActive ? "" : "inactive", session ? "session" : ""].filter(Boolean).join(" ");
   return (
     <li className={className}>
       <span className="deviceName">{name}</span>
-      {classDisplayName && classDisplayName !== name && <span className="deviceClass">{classDisplayName}</span>}
+      {session ? (
+        <span className="deviceClass">{session}</span>
+      ) : (
+        classDisplayName && classDisplayName !== name && <span className="deviceClass">{classDisplayName}</span>
+      )}
       <span className="deviceType">
         {deviceTypeLabels[type]}
         {!isActive && " · Off"}

@@ -12,6 +12,7 @@
   --instrument: #7aa7ff;
   --audio-effect: #5fd1a0;
   --midi-effect: #f2c94c;
+  --session: #c792ff;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -342,5 +343,310 @@ button {
   .trackHeader {
     border-right: 0;
     border-bottom: 1px solid var(--border);
+  }
+}
+
+/* Session */
+
+.SessionPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.SessionPanel.empty p {
+  max-width: 720px;
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.SessionPanel code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.sessionHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+}
+
+.sessionHeader h2 {
+  margin: 0;
+  color: var(--session);
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sessionMeta {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.chordStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chordStrip li {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  font: 600 12px/1.4 var(--mono);
+}
+
+.chordStrip li.predicted {
+  border: 1px dashed var(--session);
+  background: transparent;
+  color: var(--session);
+}
+
+.players {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 12px;
+}
+
+.PlayerCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--session);
+  border-radius: 8px;
+  background: var(--surface-raised);
+}
+
+.PlayerCard.off,
+.PlayerCard.waiting {
+  border-left-color: var(--border);
+}
+
+.playerHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.playerTrack {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.playerInstrument {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.statusPill {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.statusPill.playing {
+  background: color-mix(in srgb, var(--play) 20%, transparent);
+  color: var(--play);
+}
+
+.statusPill.listening {
+  background: color-mix(in srgb, var(--session) 20%, transparent);
+  color: var(--session);
+}
+
+.statusPill.error {
+  background: color-mix(in srgb, var(--record) 20%, transparent);
+  color: var(--record);
+}
+
+.playerMessage {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.decision {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.decisionMain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.decision .pattern {
+  font: 600 16px/1.3 var(--mono);
+}
+
+.decisionChords {
+  font: 13px var(--mono);
+}
+
+.tag {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #1a1a1a;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.decisionMeta,
+.fallback {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.fallback {
+  color: var(--accent);
+}
+
+.decision.missed .pattern {
+  color: var(--record);
+}
+
+.playerStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+}
+
+.playerStats dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.playerStats dd {
+  margin: 0;
+  font: 13px var(--mono);
+}
+
+.stateText summary {
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stateText pre {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--bg);
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font: 12px var(--mono);
+}
+
+.history li {
+  display: grid;
+  grid-template-columns: 3ch minmax(0, 1fr) minmax(0, 1fr) 7ch;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.history li > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyBar {
+  text-align: right;
+}
+
+.history li.missed .historyOutcome {
+  color: var(--record);
+}
+
+.inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.InputRow {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 10rem) minmax(0, 11rem) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.inputDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.inputDot.connected {
+  background: var(--play);
+}
+
+.inputTrack {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inputRole {
+  color: var(--text-muted);
+}
+
+.inputNotes {
+  overflow: hidden;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.DeviceCard.session {
+  border-top-color: var(--session);
+}
+
+@media (max-width: 640px) {
+  .InputRow {
+    grid-template-columns: 8px minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .inputNotes {
+    grid-column: 2 / -1;
   }
 }

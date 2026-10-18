@@ -1,9 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ClientMessage, LiveState, SOCKET_PATH, ServerMessage, TransportCommand, initialLiveState } from "common";
+import {
+  ClientMessage,
+  LiveState,
+  SOCKET_PATH,
+  ServerMessage,
+  SessionState,
+  TransportCommand,
+  initialLiveState,
+  initialSessionState,
+} from "common";
 
 const RECONNECT_INTERVAL = 1000;
 
-const applyMessage = (state: LiveState, message: ServerMessage): LiveState => {
+export type ClientState = LiveState & { session: SessionState };
+
+const initialState: ClientState = { ...initialLiveState, session: initialSessionState };
+
+const applyMessage = (state: ClientState, message: ServerMessage): ClientState => {
   switch (message.type) {
     case "status":
       return { ...state, status: message.status };
@@ -11,6 +24,8 @@ const applyMessage = (state: LiveState, message: ServerMessage): LiveState => {
       return { ...state, tracks: message.tracks };
     case "transport":
       return { ...state, transport: message.transport };
+    case "session":
+      return { ...state, session: message.session };
     default:
       return state;
   }
@@ -22,7 +37,7 @@ const applyMessage = (state: LiveState, message: ServerMessage): LiveState => {
  */
 export const useLiveSocket = () => {
   const [isOnline, setIsOnline] = useState(false);
-  const [state, setState] = useState<LiveState>(initialLiveState);
+  const [state, setState] = useState<ClientState>(initialState);
   const socketRef = useRef<WebSocket>();
 
   useEffect(() => {
@@ -42,7 +57,7 @@ export const useLiveSocket = () => {
       };
       socket.onclose = () => {
         setIsOnline(false);
-        setState(initialLiveState);
+        setState(initialState);
         if (!isClosed) retryTimer = window.setTimeout(connect, RECONNECT_INTERVAL);
       };
     };

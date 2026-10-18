@@ -5,7 +5,7 @@ import { LiveStore, StoreChange } from "./store";
 // Changes are batched so a burst of updates from Live goes out as one message per kind.
 const FLUSH_INTERVAL = 30;
 
-const allChanges: StoreChange[] = ["status", "tracks", "transport"];
+const allChanges: StoreChange[] = ["status", "tracks", "transport", "session"];
 
 const toMessage = (change: StoreChange, store: LiveStore): ServerMessage => {
   const { status, tracks, transport } = store.state;
@@ -16,6 +16,8 @@ const toMessage = (change: StoreChange, store: LiveStore): ServerMessage => {
       return { type: "tracks", tracks };
     case "transport":
       return { type: "transport", transport };
+    case "session":
+      return { type: "session", session: store.session };
   }
 };
 

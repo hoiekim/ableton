@@ -1,6 +1,14 @@
-import { ConnectionStatus, LiveState, TrackState, TransportState, initialTransport } from "common";
+import {
+  ConnectionStatus,
+  LiveState,
+  SessionState,
+  TrackState,
+  TransportState,
+  initialSessionState,
+  initialTransport,
+} from "common";
 
-export type StoreChange = "status" | "tracks" | "transport";
+export type StoreChange = "status" | "tracks" | "transport" | "session";
 
 type Listener = (change: StoreChange) => void;
 
@@ -12,6 +20,11 @@ const toSixteenths = (songTime: number) => Math.floor(songTime * 4 + 1e-6);
  */
 export class LiveStore {
   state: LiveState = { status: "disconnected", transport: { ...initialTransport }, tracks: [] };
+
+  session: SessionState = initialSessionState;
+
+  /** When Live last reported the song position (performance.now()), for estimating it in between. */
+  songTimeAt = 0;
 
   private listeners = new Set<Listener>();
 
@@ -33,6 +46,11 @@ export class LiveStore {
     this.notify("tracks");
   };
 
+  setSession = (session: SessionState) => {
+    this.session = session;
+    this.notify("session");
+  };
+
   /**
    * Song time changes many times per beat while playing, so it only counts as
    * a change once the position crosses into the next sixteenth.
@@ -41,6 +59,7 @@ export class LiveStore {
     const previous = this.state.transport;
     const next = { ...previous, ...patch };
     this.state.transport = next;
+    if (patch.songTime !== undefined) this.songTimeAt = performance.now();
 
     const keys = Object.keys(patch) as (keyof TransportState)[];
     const changed = keys.some((key) => {

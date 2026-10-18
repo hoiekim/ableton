@@ -2,6 +2,7 @@ import path from "path";
 import { stat } from "fs/promises";
 import { SOCKET_PATH } from "common";
 import { LiveBridge } from "./live";
+import { SessionEngine } from "./session/engine";
 import { createSocketHandler } from "./socket";
 import { LiveStore } from "./store";
 
@@ -56,3 +57,5 @@ Bun.serve({
 console.info("ableton-live-controller server is up.");
 
 bridge.start();
+
+new SessionEngine(store, bridge.ops).start();

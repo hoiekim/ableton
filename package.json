@@ -6,14 +6,18 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "bun ./build.ts",
+    "build:devices": "bun ./scripts/build-devices.ts",
     "start": "bun ./dist/server/index.js",
     "mock": "bun ./scripts/mock-live.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit --skipLibCheck"
   },
   "author": "hoiekim",
   "license": "ISC",
   "dependencies": {
-    "ableton-live": "^0.12.0"
+    "ableton-live": "^0.12.0",
+    "osc-min": "^2.1.2",
+    "tonal": "^6.5.1"
   },
   "devDependencies": {
     "@types/bun": "^1.1.6",

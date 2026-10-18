@@ -3,12 +3,14 @@ import { AbletonLive } from "ableton-live";
 import {
   DeviceState,
   DeviceType,
+  ParamValue,
   TrackState,
   TrackType,
   TransportCommand,
   TransportState,
   initialTransport,
 } from "common";
+import { ClipSlotInfo, ClipSpec, LiveOps } from "./session/ops";
 import { LiveStore } from "./store";
 
 // LiveAPI.amxd (shipped in node_modules/ableton-live/external) must be loaded
@@ -62,6 +64,13 @@ const trackLists: { child: string; type?: TrackType; props: string[] }[] = [
 
 const deviceProps = ["name", "type", "class_name", "class_display_name", "is_active"];
 
+// Session Player and Session Input devices are recognized by their parameter
+// names ("SP Instrument", "SPI Role", ...), so renaming a device is fine.
+const SESSION_PARAM = /^SPI? /;
+
+/** Clip launch quantization index for "1 Bar" (Live object model). */
+const LAUNCH_ONE_BAR = 5;
+
 const deviceTypes: Record<number, DeviceType> = { 1: "instrument", 2: "audio_effect", 4: "midi_effect" };
 
 /**
@@ -95,6 +104,18 @@ const toDeviceType = (value: unknown): DeviceType => {
   if (type === "instrument" || type === "audio_effect" || type === "midi_effect") return type;
   return deviceTypes[Number(type)] ?? "undefined";
 };
+
+const toItems = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map((item) => String(item).replace(/^"(.*)"$/, "$1"));
+  return typeof value === "string" && value ? [value] : [];
+};
+
+const toParamValue = (value: number, items: string[]): ParamValue => {
+  const label = items[Math.round(value)];
+  return label === undefined ? { value } : { value, label };
+};
+
+const round = (value: number) => Math.round(value * 10000) / 10000;
 
 const toTrackType = (raw: RawChild): TrackType => {
   if (toBoolean(raw.is_foldable, "is_foldable")) return "group";
@@ -363,7 +384,91 @@ class LiveSession {
       this.watch(id, "name", (value) => (state.name = toText(value, "name"))),
       this.watch(id, "is_active", (value) => (state.isActive = toBoolean(value, "is_active"))),
     ]);
+    // Only Max for Live devices can be Session devices.
+    if (state.className.startsWith("Mx")) unsubscribes.push(...(await this.loadSessionParams(state)));
     return { state, unsubscribes };
+  };
+
+  /** Reads and observes the parameters of a Session Player or Session Input device. */
+  private loadSessionParams = async (state: DeviceState): Promise<Unsubscribe[]> => {
+    const raws = await this.children(`id ${state.id}`, "parameters", ["name", "value", "value_items"], state.id);
+    const params = raws
+      .map((raw) => ({
+        id: Number(raw.id),
+        name: toText(raw.name, "name"),
+        value: toNumber(raw.value, "value"),
+        items: toItems(raw.value_items),
+      }))
+      .filter((param) => SESSION_PARAM.test(param.name));
+    if (!params.length) return [];
+
+    const session = {
+      kind: params.some((param) => param.name.startsWith("SP ")) ? ("player" as const) : ("input" as const),
+      params: Object.fromEntries(params.map((param) => [param.name, toParamValue(param.value, param.items)])),
+    };
+    state.session = session;
+    return Promise.all(
+      params.map((param) =>
+        this.watch(param.id, "value", (value) => {
+          const number = toNumber(value, "value");
+          if (Number.isFinite(number)) session.params[param.name] = toParamValue(number, param.items);
+        })
+      )
+    );
+  };
+
+  /** Clip operations for the Session Player, over the same connection. */
+  ops: LiveOps = {
+    clipSlots: async (trackId) => {
+      const raws = await this.children(`id ${trackId}`, "clip_slots", ["has_clip"], trackId);
+      return raws.map((raw, index) => ({ id: Number(raw.id), index, hasClip: toBoolean(raw.has_clip, "has_clip") }));
+    },
+    playingSlotIndex: async (trackId) => {
+      return toNumber(await this.live.get(`id ${trackId}`, "playing_slot_index", trackId), "playing_slot_index");
+    },
+    writeClip: async (slot: ClipSlotInfo, spec: ClipSpec) => {
+      const slotPath = `id ${slot.id}`;
+      let clip = await this.clipIn(slot.id);
+      if (clip && Math.abs(clip.length - spec.length) > 1e-6) {
+        await this.live.call(slotPath, { method: "delete_clip", parameters: [] }, slot.id);
+        clip = undefined;
+      }
+      const created = !clip;
+      if (!clip) {
+        await this.live.call(slotPath, { method: "create_clip", parameters: [spec.length] }, slot.id);
+        clip = await this.clipIn(slot.id);
+        if (!clip) throw new Error(`Live didn't create a clip in slot ${slot.index + 1}`);
+      }
+      const { id } = clip;
+      const clipPath = `id ${id}`;
+      const notes = spec.notes.map((note) => ({
+        pitch: note.pitch,
+        start_time: round(note.start),
+        duration: round(note.duration),
+        velocity: note.velocity,
+      }));
+      // The bridge handles requests in order, so these go out together.
+      await Promise.all([
+        created ? undefined : this.live.call(clipPath, { method: "remove_notes_extended", parameters: [0, 128, 0, spec.length + 1] }, id),
+        notes.length ? this.live.call(clipPath, { method: "add_new_notes", parameters: [{ notes }] }, id) : undefined,
+        this.live.set(clipPath, "name", spec.name, id),
+        created ? this.live.set(clipPath, "color", spec.color, id) : undefined,
+        created ? this.live.set(clipPath, "looping", 1, id) : undefined,
+        created ? this.live.set(clipPath, "launch_quantization", LAUNCH_ONE_BAR, id) : undefined,
+      ]);
+      return id;
+    },
+    fireClip: async (clipId) => {
+      await this.live.call(`id ${clipId}`, { method: "fire", parameters: [] }, clipId);
+    },
+    stopTrack: async (trackId) => {
+      await this.live.call(`id ${trackId}`, { method: "stop_all_clips", parameters: [] }, trackId);
+    },
+  };
+
+  private clipIn = async (slotId: number) => {
+    const [clip] = await this.children(`id ${slotId}`, "clip", ["length"], slotId);
+    return clip ? { id: Number(clip.id), length: toNumber(clip.length, "length") } : undefined;
   };
 
   /**
@@ -454,6 +559,11 @@ export class LiveBridge {
     this.stopped = true;
     clearTimeout(this.retryTimer);
     if (this.live) this.drop(this.live);
+  };
+
+  /** Clip operations, while connected and in sync. */
+  ops = (): LiveOps | undefined => {
+    return this.store.state.status === "connected" ? this.session?.ops : undefined;
   };
 
   command = async (command: TransportCommand) => {

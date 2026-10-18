@@ -16,6 +16,19 @@ export interface TransportState {
 
 export type DeviceType = "instrument" | "audio_effect" | "midi_effect" | "undefined";
 
+export interface ParamValue {
+  value: number;
+  /** The selected item's label, for enum parameters. */
+  label?: string;
+}
+
+/** Present on Session Player and Session Input devices, recognized by their parameter names. */
+export interface SessionDeviceInfo {
+  kind: "player" | "input";
+  /** Parameter values keyed by long name, e.g. "SP Instrument". */
+  params: Record<string, ParamValue>;
+}
+
 export interface DeviceState {
   id: number;
   name: string;
@@ -23,6 +36,7 @@ export interface DeviceState {
   classDisplayName: string;
   type: DeviceType;
   isActive: boolean;
+  session?: SessionDeviceInfo;
 }
 
 export type TrackType = "audio" | "midi" | "group" | "return" | "master";
@@ -62,10 +76,85 @@ export const initialLiveState: LiveState = {
   tracks: [],
 };
 
+export const instruments = ["drums", "bass", "keys", "guitar"] as const;
+
+export type Instrument = (typeof instruments)[number];
+
+export const inputRoles = ["auto", "bass", "chords", "melody", "drums"] as const;
+
+export type InputRole = (typeof inputRoles)[number];
+
+export type PlayerStatus = "off" | "waiting" | "listening" | "playing" | "error";
+
+export type DecisionOutcome = "fired" | "kept" | "missed";
+
+export interface DecisionLog {
+  /** Bar number (1-based, counted from when playback started) the decision is for. */
+  bar: number;
+  pattern: string;
+  energy: number;
+  fill: boolean;
+  /** Chord per bar the clip was rendered against. */
+  chords: string[];
+  provider: string;
+  confidence?: number;
+  /** Set when the chosen provider failed or was unsure and local rules decided instead. */
+  fallbackReason?: string;
+  decisionMs: number;
+  /** Time left before the bar started once the clip was in place; negative when it missed. */
+  marginMs: number;
+  outcome: DecisionOutcome;
+  clipName?: string;
+  /** The text the decision model was given. */
+  state: string;
+}
+
+export interface PlayerState {
+  deviceId: number;
+  trackId: number;
+  trackName: string;
+  instrument: Instrument;
+  active: boolean;
+  lookahead: number;
+  length: number;
+  join: number;
+  energy: number | "auto";
+  status: PlayerStatus;
+  message?: string;
+  provider: string;
+  recent: DecisionLog[];
+  stats: { decisions: number; misses: number; p90Ms: number };
+}
+
+export interface InputState {
+  deviceId: number;
+  trackId: number;
+  trackName: string;
+  kind: "midi" | "audio";
+  role: InputRole;
+  on: boolean;
+  connected: boolean;
+  /** Notes heard in the last complete bar, e.g. ["A2", "E3"]. */
+  lastNotes: string[];
+}
+
+export interface SessionState {
+  bar: number;
+  key?: string;
+  /** Detected chord per recent bar, oldest first. */
+  chords: string[];
+  predictedChord?: string;
+  players: PlayerState[];
+  inputs: InputState[];
+}
+
+export const initialSessionState: SessionState = { bar: 0, chords: [], players: [], inputs: [] };
+
 export type ServerMessage =
   | { type: "status"; status: ConnectionStatus }
   | { type: "tracks"; tracks: TrackState[] }
-  | { type: "transport"; transport: TransportState };
+  | { type: "transport"; transport: TransportState }
+  | { type: "session"; session: SessionState };
 
 export const transportCommands = ["play", "stop", "toggleRecord", "toggleMetronome", "toggleLoop"] as const;
 

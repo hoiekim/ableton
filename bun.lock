@@ -6,6 +6,8 @@
       "name": "ableton-live-controller",
       "dependencies": {
         "ableton-live": "^0.12.0",
+        "osc-min": "^2.1.2",
+        "tonal": "^6.5.1",
       },
       "devDependencies": {
         "@types/bun": "^1.1.6",
@@ -19,6 +21,62 @@
     },
   },
   "packages": {
+    "@tonaljs/abc-notation": ["@tonaljs/abc-notation@4.9.3", "", { "dependencies": { "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-note": "6.1.2" } }, "sha512-t1mH17qPEDSHqSa4+enqeYPEf/6vLZD8aavsMGY1eiXGUO3lIc6sjkI2skQEmhFlMCTEx6HO/dJQL3Det7U2Kw=="],
+
+    "@tonaljs/array": ["@tonaljs/array@4.8.6", "", { "dependencies": { "@tonaljs/pitch-note": "6.1.2" } }, "sha512-zBLWZVvZEtbekuV1+60cx5LZcT8tMU1fa1OGzxV7Zz0WuanckMw5Wm0v9LUCHnWxvBMWXlIsoWm6W98A6Mj7bg=="],
+
+    "@tonaljs/chord": ["@tonaljs/chord@6.2.1", "", { "dependencies": { "@tonaljs/chord-detect": "4.9.3", "@tonaljs/chord-type": "5.2.1", "@tonaljs/collection": "4.9.1", "@tonaljs/interval": "^5.1.1", "@tonaljs/pcset": "4.10.3", "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-note": "6.1.2", "@tonaljs/scale-type": "4.9.4" } }, "sha512-7K4J8B6xv8usTkKJ/Fg/r5Ay6Nc0TxWc+jr25ijYPJZstJH8gnWMGxsWjFnqjZViu8lrFxa4F384iJtS+X8w+Q=="],
+
+    "@tonaljs/chord-detect": ["@tonaljs/chord-detect@4.9.3", "", { "dependencies": { "@tonaljs/chord-type": "5.2.1", "@tonaljs/pcset": "4.10.3", "@tonaljs/pitch-note": "6.1.2" } }, "sha512-L6qFtpM2hFXM7Nexq1EPM+6vt5tElYzFftmtH2UbtwmpS2f6+Lx9iPC8hBuu3HLUFld5vOd+7o7hyzabDAmsDg=="],
+
+    "@tonaljs/chord-type": ["@tonaljs/chord-type@5.2.1", "", { "dependencies": { "@tonaljs/pcset": "4.10.3" } }, "sha512-Zr1HApsSLFklR4VFOlxnM+7eCLQ1VZEOSBTuSLa3cd+Y/LLsbOI+xDxraspcAfPP3tgJziQFkzT864eF47cY3w=="],
+
+    "@tonaljs/collection": ["@tonaljs/collection@4.9.1", "", {}, "sha512-xcWRxcX17qwMKEBAcpkp100eFeRbNnt08FEoomAmbfkpg7i33iNwsR8FFHJ9CnkoMcEVKqLVEGW5hdEXMSjjCg=="],
+
+    "@tonaljs/core": ["@tonaljs/core@5.0.4", "", { "dependencies": { "@tonaljs/pitch": "5.0.3", "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-interval": "6.1.2", "@tonaljs/pitch-note": "6.1.2" } }, "sha512-KQ1EcjgduPkBzduJ0FhezndTQZsupqcdulh9kLcUSH6YY1ehDsJzRm3vdXdcvSn5SqHs2oxveM2TENQColAErw=="],
+
+    "@tonaljs/duration-value": ["@tonaljs/duration-value@4.9.1", "", {}, "sha512-wX3Q3QM0tTC2ZP7RyWxnOcHh47Z3zf93UaKi0W9RnoNpXWxyiYWzGehPe0FzFRhcjEhh2Fl4qN9M6Feo9+etig=="],
+
+    "@tonaljs/interval": ["@tonaljs/interval@5.1.1", "", { "dependencies": { "@tonaljs/pitch": "^5.0.3", "@tonaljs/pitch-distance": "^5.0.7", "@tonaljs/pitch-interval": "^6.1.2" } }, "sha512-Zqowl7yIlSA45ibMWV4Kcb/VMd06L0GXxi6Qf2pk6ERUNbRtx+D+0S2mmIHLO/VcwkenyyUraUriYTmLiPESXA=="],
+
+    "@tonaljs/key": ["@tonaljs/key@4.11.4", "", { "dependencies": { "@tonaljs/note": "4.12.3", "@tonaljs/pitch-note": "6.1.2", "@tonaljs/roman-numeral": "4.9.3" } }, "sha512-Mhd+kNNw3l0kmPf4I5wy3zXIXqPj1/QB1bc78Zb+H5tDAT92Gycpa3vlbiKvVZrq6OsUcF9+2TNXO+P1SSbJ3w=="],
+
+    "@tonaljs/midi": ["@tonaljs/midi@4.10.4", "", { "dependencies": { "@tonaljs/pitch-note": "6.1.2" } }, "sha512-pEIwjTUiJyVlfVJlG0pYLTSCQ4xoWo+NYLChFMIcrq/KUjdrtGOwgbFVfD2jyff5qgDmH05rRrJBJsVE1gwIkg=="],
+
+    "@tonaljs/mode": ["@tonaljs/mode@4.9.4", "", { "dependencies": { "@tonaljs/collection": "4.9.1", "@tonaljs/interval": "5.1.1", "@tonaljs/pcset": "4.10.3", "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-note": "6.1.2", "@tonaljs/scale-type": "4.9.4" } }, "sha512-99kkIEVxEyfTwLFO/jUJdaHNHzTLe9B+U4bjVcgjGBFaQEYpn9DZO8/3+HbFMfkucx2wtyo1uY/JS2YGT/E/Aw=="],
+
+    "@tonaljs/note": ["@tonaljs/note@4.12.3", "", { "dependencies": { "@tonaljs/midi": "4.10.4", "@tonaljs/pitch": "5.0.3", "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-interval": "6.1.2", "@tonaljs/pitch-note": "6.1.2" } }, "sha512-UhGXcLgLymnK7ANvdCzi1D1nW+1bj4OhDGe0J82O2V+ofYVdBCKc0w5a79mfGEt01omKARaWeAzf3rgSEopwEQ=="],
+
+    "@tonaljs/pcset": ["@tonaljs/pcset@4.10.3", "", { "dependencies": { "@tonaljs/collection": "4.9.1", "@tonaljs/pitch": "5.0.3", "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-interval": "6.1.2", "@tonaljs/pitch-note": "6.1.2" } }, "sha512-LhynuFEyjgPJH4T9VENDRx1CSqKR9kJ2txWTqyxwUoCMnNL3I7UdyxFKPijr2V1IEMplJsk/G1TaPMYVVCdqoA=="],
+
+    "@tonaljs/pitch": ["@tonaljs/pitch@5.0.3", "", {}, "sha512-2OpxK/p0NaOymVdlxgJxruFAt2pHfFIkPxkQ3PKQqMXhaza+SXG1Kxpo0jpuAjw946LlQ3KBC+GJRSncjYtoKA=="],
+
+    "@tonaljs/pitch-distance": ["@tonaljs/pitch-distance@5.0.7", "", { "dependencies": { "@tonaljs/pitch": "5.0.3", "@tonaljs/pitch-interval": "6.1.2", "@tonaljs/pitch-note": "6.1.2" } }, "sha512-x+tC1izI1+5dzhHf1JRVVggN4pFEKTkbANSLRYEwW6PmUm3uuPPsDwHyHCWE9iwlIEc9YpG8Kc1ioeXGiCQ9xg=="],
+
+    "@tonaljs/pitch-interval": ["@tonaljs/pitch-interval@6.1.2", "", { "dependencies": { "@tonaljs/pitch": "5.0.3" } }, "sha512-obMQb1Z1rP54BMiJmroCeStHsQyYCuI2MwxadAjvFYl69h2Cv+yBH5/A9Miq25hQi/M2yLjBZtm1nE9opL9Ltg=="],
+
+    "@tonaljs/pitch-note": ["@tonaljs/pitch-note@6.1.2", "", { "dependencies": { "@tonaljs/pitch": "5.0.3" } }, "sha512-xNtUXR6DvFMHyXKgewF0QFv9UIAd8Xxc07HIWOABIGFuKFmgT3znN2TbACSnHJGIKVfSoJhwPen2eok6UdOCwg=="],
+
+    "@tonaljs/progression": ["@tonaljs/progression@4.9.4", "", { "dependencies": { "@tonaljs/chord": "6.2.1", "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-interval": "6.1.2", "@tonaljs/pitch-note": "6.1.2", "@tonaljs/roman-numeral": "4.9.3" } }, "sha512-AEwXlVztdlKNgHFDscR5cBzbCkGVjLOZ/gNnxTOCbj3vYaqw8+Fek76ZCCwT1eVkcuD+C690AgTEPrMemENI1g=="],
+
+    "@tonaljs/range": ["@tonaljs/range@4.9.4", "", { "dependencies": { "@tonaljs/collection": "4.9.1", "@tonaljs/midi": "4.10.4" } }, "sha512-2ZDAy5HmDGt1rySlkqS+jbWsSwhudJJwVZ7JITdCKz4ZU9S0xbGsKvg/jjRv/sFiaEL3EeCKSAC6C4eWz8Y7Vg=="],
+
+    "@tonaljs/rhythm-pattern": ["@tonaljs/rhythm-pattern@1.0.1", "", {}, "sha512-4nMuBnlL9GDX8SoJneiYlMyNxiKynMAA9jf0ubB04sPqe6ALE+sLCNlqcKoYO9ARZ92bUN4Etj5VWMN7pdevDQ=="],
+
+    "@tonaljs/roman-numeral": ["@tonaljs/roman-numeral@4.9.3", "", { "dependencies": { "@tonaljs/pitch": "5.0.3", "@tonaljs/pitch-interval": "6.1.2", "@tonaljs/pitch-note": "6.1.2" } }, "sha512-MnnVYosos1unepZRQd3fGKV5FQXNXs1ijUEN1pL65GuAlEhKIikDUR8nNgl7IoSEp63TpEhKXZXK7efZt1e95w=="],
+
+    "@tonaljs/scale": ["@tonaljs/scale@4.13.6", "", { "dependencies": { "@tonaljs/chord-type": "5.2.1", "@tonaljs/collection": "4.9.1", "@tonaljs/note": "4.12.3", "@tonaljs/pcset": "4.10.3", "@tonaljs/pitch-distance": "5.0.7", "@tonaljs/pitch-note": "6.1.2", "@tonaljs/scale-type": "4.9.4" } }, "sha512-Yb+gWXj5G4nTZ8jm+RwFvupVkvZ2NhrLNpPv5WW8nFXjYtMdsGR88fg7Fg3bAxjQSoMAdFY59yXNv7NbfQ0rSg=="],
+
+    "@tonaljs/scale-type": ["@tonaljs/scale-type@4.9.4", "", { "dependencies": { "@tonaljs/pcset": "4.10.3" } }, "sha512-yuG4dLCrA9q2X+DpIMrz+4S+8CLCFDBWm+WQh/sJgBaU2ADULjajuYnWPWacBAPpBDVXYYgbvm8Qbs6EzLGvrg=="],
+
+    "@tonaljs/time-signature": ["@tonaljs/time-signature@4.10.1", "", {}, "sha512-ljAA8x1ChYMmYAThAPfUuzLNrFWd+eVuvljUzbgg3Fnmvjnwg4JgTku0kK9wqDZc7NsdngFlS32kzAOS2eUBmw=="],
+
+    "@tonaljs/voice-leading": ["@tonaljs/voice-leading@5.1.4", "", { "dependencies": { "@tonaljs/note": "4.12.3" } }, "sha512-Qn2RkwjL6zfpiklE9hFKsg7IK69aBKgCZXNmDTJPm6cyReXMrSvO/Ufv7YahfbypHTthL05zE27QviB3SaYJKw=="],
+
+    "@tonaljs/voicing": ["@tonaljs/voicing@5.1.5", "", { "dependencies": { "@tonaljs/chord": "6.2.1", "@tonaljs/interval": "5.1.1", "@tonaljs/note": "4.12.3", "@tonaljs/range": "4.9.4", "@tonaljs/voice-leading": "5.1.4", "@tonaljs/voicing-dictionary": "5.1.5" } }, "sha512-iNbXna6aCUdiTbl2bxPeSTiUwthDsvJGFyWF0zlNYFCTAW5aSgXUlVPqHpAsCuQuy5QDUIWuyTxWN7qfvwvMNw=="],
+
+    "@tonaljs/voicing-dictionary": ["@tonaljs/voicing-dictionary@5.1.5", "", { "dependencies": { "@tonaljs/chord": "6.2.1", "@tonaljs/note": "4.12.3", "@tonaljs/voice-leading": "5.1.4" } }, "sha512-XALBmXTeR04Z9+IlHFjspLeHDT9wQ9bkU9OGaETCXOZkO5r6KOoxnv7ZvA9nkWVH7AmOagRM/+xEbLgCYe9xag=="],
+
     "@types/bun": ["@types/bun@1.1.6", "", { "dependencies": { "bun-types": "1.1.17" } }, "sha512-uJgKjTdX0GkWEHZzQzFsJkWp5+43ZS7HC8sZPFnOwnSo1AsNl2q9o2bFeS23disNDqbggEgyFkKCHl/w8iZsMA=="],
 
     "@types/node": ["@types/node@20.14.10", "", { "dependencies": { "undici-types": "~5.26.4" } }, "sha512-MdiXf+nDuMvY0gJKxyfZ7/6UFsETO7mGKF54MVD/ekJS6HdFtpZFBgrh6Pseu64XTb2MLyFPlbW6hj8HYRQNOQ=="],
@@ -45,11 +103,15 @@
 
     "nanoid": ["nanoid@5.0.7", "", { "bin": "bin/nanoid.js" }, "sha512-oLxFY2gd2IqnjcYyOXD8XGCftpGtZP2AbHbOkthDkvRywH5ayNtPVy9YlOPcHckXzbLTCHpkb7FB+yuxKV13pQ=="],
 
+    "osc-min": ["osc-min@2.1.2", "", {}, "sha512-dEhg7wBJ+QTHqY4iwnctkaFWzXLq+yHA2olxYfnxBw1fMy/iWJ/b7ovfXfwc/yxLXGiUHQhTxlQSHzL8ueHz6Q=="],
+
     "react": ["react@18.3.1", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-wS+hAgJShR0KhEvPJArfuPVN1+Hz1t0Y6n5jLrGQbkb4urgPE/0Rve+1kMB1v/oWgHgm4WIcV+i7F2pTVj+2iQ=="],
 
     "react-dom": ["react-dom@18.3.1", "", { "dependencies": { "loose-envify": "^1.1.0", "scheduler": "^0.23.2" }, "peerDependencies": { "react": "^18.3.1" } }, "sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw=="],
 
     "scheduler": ["scheduler@0.23.2", "", { "dependencies": { "loose-envify": "^1.1.0" } }, "sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ=="],
+
+    "tonal": ["tonal@6.5.1", "", { "dependencies": { "@tonaljs/abc-notation": "4.9.3", "@tonaljs/array": "4.8.6", "@tonaljs/chord": "6.2.1", "@tonaljs/chord-type": "5.2.1", "@tonaljs/collection": "4.9.1", "@tonaljs/core": "5.0.4", "@tonaljs/duration-value": "4.9.1", "@tonaljs/interval": "5.1.1", "@tonaljs/key": "4.11.4", "@tonaljs/midi": "4.10.4", "@tonaljs/mode": "4.9.4", "@tonaljs/note": "4.12.3", "@tonaljs/pcset": "4.10.3", "@tonaljs/progression": "4.9.4", "@tonaljs/range": "4.9.4", "@tonaljs/rhythm-pattern": "1.0.1", "@tonaljs/roman-numeral": "4.9.3", "@tonaljs/scale": "4.13.6", "@tonaljs/scale-type": "4.9.4", "@tonaljs/time-signature": "4.10.1", "@tonaljs/voice-leading": "5.1.4", "@tonaljs/voicing": "5.1.5", "@tonaljs/voicing-dictionary": "5.1.5" } }, "sha512-zIg3eBoRooX6f3bSFpPh/qKWMRrWGbNUVgklqCXDKt8eDi9snJt5UBFhwE3/JkupPV5w+JaeU7Lk0f0sFTFM/Q=="],
 
     "typescript": ["typescript@5.5.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-/hreyEujaB0w76zKo6717l3L0o/qEUtRgdvUBvlkhoWeOVMjMuHNHk0BRBzikzuGDqNmPQbg5ifMEqsHLiIUcQ=="],
 
