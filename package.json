@@ -9,6 +9,7 @@
     "build:devices": "bun ./scripts/build-devices.ts",
     "start": "bun ./dist/server/index.js",
     "mock": "bun ./scripts/mock-live.ts",
+    "jam-check": "bun ./scripts/jam-check.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit --skipLibCheck"
   },

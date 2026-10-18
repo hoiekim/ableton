@@ -5,9 +5,11 @@ import { LiveStore, StoreChange } from "./store";
 // Changes are batched so a burst of updates from Live goes out as one message per kind.
 const FLUSH_INTERVAL = 30;
 
-const allChanges: StoreChange[] = ["status", "tracks", "transport", "session"];
+type ClientChange = Exclude<StoreChange, "clips">;
 
-const toMessage = (change: StoreChange, store: LiveStore): ServerMessage => {
+const allChanges: ClientChange[] = ["status", "tracks", "transport", "session"];
+
+const toMessage = (change: ClientChange, store: LiveStore): ServerMessage => {
   const { status, tracks, transport } = store.state;
   switch (change) {
     case "status":
@@ -40,7 +42,7 @@ export const createSocketHandler = (
   onCommand: (command: TransportCommand) => void
 ): WebSocketHandler => {
   const sockets = new Set<ServerWebSocket>();
-  const changes = new Set<StoreChange>();
+  const changes = new Set<ClientChange>();
   let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
   const flush = () => {
@@ -53,6 +55,7 @@ export const createSocketHandler = (
   };
 
   store.subscribe((change) => {
+    if (change === "clips") return;
     changes.add(change);
     flushTimer ??= setTimeout(flush, FLUSH_INTERVAL);
   });

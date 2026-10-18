@@ -60,11 +60,22 @@ export interface BarFeatures {
 export interface ChordGuess {
   chord?: ChordInfo;
   predicted: boolean;
-  /** Heard in a finished bar, predicted from a repeating loop, or the latest chord held over. */
-  source: "heard" | "loop" | "held";
+  /**
+   * Heard in a finished bar, read from the clips the band is playing,
+   * predicted from a repeating loop, or the latest chord held over.
+   */
+  source: "heard" | "clip" | "loop" | "held";
   /** 0–1. */
   confidence: number;
+  /** For a chord read from clips: the tracks whose clips it came from. */
+  tracks?: string[];
 }
+
+/**
+ * What the band's clips will play in a bar (the current one or one ahead),
+ * per input, in the bar's beats. Inputs played live aren't in it.
+ */
+export type UpcomingNotes = (index: number) => InputBar[];
 
 export interface BandAnalysis {
   bars: BarFeatures[];
@@ -74,7 +85,10 @@ export interface BandAnalysis {
   loopConfidence: number;
   energy: number;
   energyTrend: "rising" | "falling" | "steady";
-  /** Chord for a bar index (completed, current or future), predicted from the loop when ahead. */
+  /**
+   * Chord for a bar index (completed, current or future). Ahead of what's been
+   * heard it's read from the band's clips when they play any, else predicted.
+   */
   chordAt: (index: number) => ChordGuess;
 }
 
@@ -260,8 +274,14 @@ export const analyzeBar = (bar: BarRecord, key?: KeyInfo): BarFeatures => {
   };
 };
 
-/** Analyzes recent bars (oldest first; the last may be partial). */
-export const analyzeBand = (records: BarRecord[]): BandAnalysis => {
+/** Confidence in a chord read from clips: they say exactly what will play, unless someone launches another. */
+const CLIP_CONFIDENCE = 0.95;
+
+/**
+ * Analyzes recent bars (oldest first; the last may be partial). `upcoming`
+ * gives the notes the band's clips will play, for the bars not yet heard.
+ */
+export const analyzeBand = (records: BarRecord[], upcoming?: UpcomingNotes): BandAnalysis => {
   const keyProfile = new Array(12).fill(0);
   const firstPass = records.map((record) => analyzeBar(record));
   firstPass.slice(-8).forEach((bar) => bar.pitchClasses.forEach((w, pc) => (keyProfile[pc] += w)));
@@ -285,11 +305,28 @@ export const analyzeBand = (records: BarRecord[]): BandAnalysis => {
   const delta = earlierEnergy.length ? average(recentEnergy) - average(earlierEnergy) : 0;
 
   const lastIndex = bars.length ? bars[bars.length - 1].index : 0;
+  const beatsPerBar = records[records.length - 1]?.beatsPerBar ?? 4;
+  const fromClips = new Map<number, ChordGuess | undefined>();
+  const clipChord = (index: number) => {
+    if (fromClips.has(index)) return fromClips.get(index);
+    const inputs = upcoming?.(index).filter((input) => input.notes.length) ?? [];
+    const bar = inputs.length ? analyzeBar({ index, beatsPerBar, inputs }, key) : undefined;
+    const tracks = bar?.parts.filter((part) => part.role !== "drums").map((part) => part.trackName) ?? [];
+    // A bar the clips leave silent says nothing about the harmony.
+    const guess: ChordGuess | undefined =
+      bar?.chord && tracks.length ? { chord: bar.chord, predicted: true, source: "clip", confidence: CLIP_CONFIDENCE, tracks } : undefined;
+    fromClips.set(index, guess);
+    return guess;
+  };
+
   const chordAt = (index: number): ChordGuess => {
     const position = bars.findIndex((bar) => bar.index === index);
     const bar = bars[position];
     if (bar && !bar.partial && chords[position]) return { chord: chords[position], predicted: false, source: "heard", confidence: 1 };
-    // Ahead of what's been heard: follow the loop, else hold the latest chord.
+    // Ahead of what's been heard: read the band's clips, else follow the loop,
+    // else hold the latest chord.
+    const clip = !bar || bar.partial ? clipChord(index) : undefined;
+    if (clip) return clip;
     const anchor = known[known.length - 1]?.index ?? 0;
     if (loop && known.length >= loop.length && index > anchor) {
       const steps = index - anchor;

@@ -7,8 +7,10 @@ import {
   initialSessionState,
   initialTransport,
 } from "common";
+import { InputClip } from "./session/clips";
 
-export type StoreChange = "status" | "tracks" | "transport" | "session";
+/** "clips" is for the Session Player only; the web app isn't sent it. */
+export type StoreChange = "status" | "tracks" | "transport" | "session" | "clips";
 
 type Listener = (change: StoreChange) => void;
 
@@ -25,6 +27,9 @@ export class LiveStore {
 
   /** When Live last reported the song position (performance.now()), for estimating it in between. */
   songTimeAt = 0;
+
+  /** The MIDI clip playing on each Session Input's track, by track id, so the players can read ahead. */
+  inputClips = new Map<number, InputClip>();
 
   private listeners = new Set<Listener>();
 
@@ -46,6 +51,13 @@ export class LiveStore {
     this.notify("tracks");
   };
 
+  setInputClip = (trackId: number, clip: InputClip | undefined) => {
+    if (!clip && !this.inputClips.has(trackId)) return;
+    if (clip) this.inputClips.set(trackId, clip);
+    else this.inputClips.delete(trackId);
+    this.notify("clips");
+  };
+
   setSession = (session: SessionState) => {
     this.session = session;
     this.notify("session");
@@ -59,7 +71,9 @@ export class LiveStore {
     const previous = this.state.transport;
     const next = { ...previous, ...patch };
     this.state.transport = next;
-    if (patch.songTime !== undefined) this.songTimeAt = performance.now();
+    // Stopped, the position doesn't move, so when playback starts it counts as
+    // just reported: extrapolating from an old report would run far ahead.
+    if (patch.songTime !== undefined || (next.isPlaying && !previous.isPlaying)) this.songTimeAt = performance.now();
 
     const keys = Object.keys(patch) as (keyof TransportState)[];
     const changed = keys.some((key) => {
@@ -73,6 +87,10 @@ export class LiveStore {
   reset = () => {
     this.patchTransport(initialTransport);
     this.setTracks([]);
+    if (this.inputClips.size) {
+      this.inputClips.clear();
+      this.notify("clips");
+    }
     this.setStatus("disconnected");
   };
 

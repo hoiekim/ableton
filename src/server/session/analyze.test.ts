@@ -129,3 +129,44 @@ describe("analyzeBand", () => {
     expect(short.chordAt(3)).toMatchObject({ predicted: true, chord: { symbol: "Fmaj7" } });
   });
 });
+
+describe("analyzeBand with the band's clips", () => {
+  /** The clips play the loop from bar 1: Bass and Keys, as `bar` builds them. */
+  const fromClips = (index: number) => bar(index, LOOP[(index - 1) % 4]).inputs;
+  const partial = (index: number): BarRecord => ({ ...bar(index, LOOP[(index - 1) % 4]), partial: true });
+
+  test("reads the next bar's chord from the clips before it's been heard", () => {
+    const analysis = analyzeBand([partial(1)], fromClips);
+    expect(analysis.chordAt(2)).toMatchObject({ source: "clip", predicted: true, chord: { symbol: "Fmaj7" }, tracks: ["Bass", "Keys"] });
+    expect(analysis.chordAt(3).chord?.symbol).toBe("C");
+    expect(analysis.chordAt(2).confidence).toBeGreaterThan(0.9);
+  });
+
+  test("covers the bar in progress too", () => {
+    expect(analyzeBand([partial(1)], fromClips).chordAt(1)).toMatchObject({ source: "clip", chord: { symbol: "Am7" } });
+  });
+
+  test("prefers the clips over the repeating loop", () => {
+    // The band launched a new progression: the clips say Dm for bar 9.
+    const records = Array.from({ length: 8 }, (_, i) => bar(i + 1, LOOP[i % 4]));
+    const analysis = analyzeBand(records, (index) => (index === 9 ? bar(9, ["D", "F", "A"]).inputs : fromClips(index)));
+    expect(analysis.loopLength).toBe(4);
+    expect(analysis.chordAt(9)).toMatchObject({ source: "clip", chord: { symbol: "Dm" } });
+  });
+
+  test("keeps what was heard in finished bars", () => {
+    const analysis = analyzeBand([bar(1, LOOP[0]), partial(2)], () => bar(0, ["D", "F", "A"]).inputs);
+    expect(analysis.chordAt(1)).toMatchObject({ source: "heard", chord: { symbol: "Am7" } });
+  });
+
+  test("falls back to the loop or the held chord where the clips are silent", () => {
+    const records = [bar(1, LOOP[0]), bar(2, LOOP[1])];
+    const silent = analyzeBand(records, (index) => fromClips(index).map((input) => ({ ...input, notes: [] })));
+    expect(silent.chordAt(3)).toMatchObject({ source: "held", chord: { symbol: "Fmaj7" } });
+  });
+
+  test("a drum clip says nothing about the chord", () => {
+    const drums = (index: number) => [{ deviceId: 9, trackName: "Drums", role: "drums" as const, notes: bar(index, ["C"]).inputs[0].notes }];
+    expect(analyzeBand([bar(1, LOOP[0]), bar(2, LOOP[1])], drums).chordAt(3).source).toBe("held");
+  });
+});

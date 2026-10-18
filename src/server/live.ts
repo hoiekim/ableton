@@ -10,6 +10,8 @@ import {
   TransportState,
   initialTransport,
 } from "common";
+import { ClipNoteData, InputClip } from "./session/clips";
+import { estimateSongTime, msPerBeat } from "./session/clock";
 import { ClipSlotInfo, ClipSpec, LiveOps } from "./session/ops";
 import { LiveStore } from "./store";
 
@@ -37,10 +39,21 @@ interface DeviceEntry {
   unsubscribes: Unsubscribe[];
 }
 
+/** Follows the clip playing on a Session Input's track. */
+interface ClipFollow {
+  unsubscribes: Unsubscribe[];
+  /** Observers on the clip playing now, to read it again when it's edited. */
+  clipUnsubscribes: Unsubscribe[];
+  clipId?: number;
+  reading: boolean;
+  stale: boolean;
+}
+
 interface TrackEntry {
   state: Omit<TrackState, "devices">;
   devices: DeviceEntry[];
   unsubscribes: Unsubscribe[];
+  clips?: ClipFollow;
 }
 
 const transportProps: Record<string, keyof TransportState> = {
@@ -63,6 +76,11 @@ const trackLists: { child: string; type?: TrackType; props: string[] }[] = [
 ];
 
 const deviceProps = ["name", "type", "class_name", "class_display_name", "is_active"];
+
+const clipProps = ["is_midi_clip", "name", "length", "looping", "loop_start", "loop_end", "start_marker", "end_marker", "playing_position"];
+
+/** Changes to these make a followed clip play something else, so it's read again. */
+const watchedClipProps = ["notes", "looping", "loop_start", "loop_end"];
 
 // Session Player and Session Input devices are recognized by their parameter
 // names ("SP Instrument", "SPI Role", ...), so renaming a device is fine.
@@ -116,6 +134,29 @@ const toParamValue = (value: number, items: string[]): ParamValue => {
 };
 
 const round = (value: number) => Math.round(value * 10000) / 10000;
+
+/** get_notes_extended answers with a dictionary, which the bridge passes on as JSON text. */
+const toClipNotes = (value: unknown): ClipNoteData[] => {
+  let parsed = unwrap(value, "notes");
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return [];
+    }
+  }
+  const notes = (parsed as { notes?: unknown } | undefined)?.notes;
+  if (!Array.isArray(notes)) return [];
+  return notes
+    .map((note) => ({
+      pitch: Number(note?.pitch),
+      start: Number(note?.start_time),
+      duration: Number(note?.duration),
+      velocity: Number(note?.velocity ?? 100),
+      mute: !!Number(note?.mute ?? 0),
+    }))
+    .filter((note) => [note.pitch, note.start, note.duration, note.velocity].every(Number.isFinite));
+};
 
 const toTrackType = (raw: RawChild): TrackType => {
   if (toBoolean(raw.is_foldable, "is_foldable")) return "group";
@@ -287,6 +328,7 @@ class LiveSession {
       this.tracks.delete(id);
       this.release(entry.unsubscribes);
       entry.devices.forEach((device) => this.release(device.unsubscribes));
+      this.unfollowClips(entry);
     });
 
     this.order = found.map(({ raw }) => Number(raw.id));
@@ -368,6 +410,114 @@ class LiveSession {
 
     track.devices = devices;
     this.publish();
+    await this.followClips(track);
+  };
+
+  /**
+   * Follows the clips on a MIDI track with a Session Input, so the Session
+   * Player can read what the band is about to play. Tracks with a Session
+   * Player are left out: their clips change every bar.
+   */
+  private followClips = async (track: TrackEntry) => {
+    const sessions = track.devices.map((device) => device.state.session?.kind);
+    const wanted = track.state.type === "midi" && sessions.includes("input") && !sessions.includes("player");
+    if (!wanted) return this.unfollowClips(track);
+    if (track.clips) return;
+    const id = track.state.id;
+    const follow: ClipFollow = { unsubscribes: [], clipUnsubscribes: [], reading: false, stale: false };
+    track.clips = follow;
+    const unsubscribe = await this.observe(`id ${id}`, "playing_slot_index", id, () => this.readClip(track, follow));
+    if (track.clips !== follow) return void this.release([unsubscribe]);
+    follow.unsubscribes.push(unsubscribe);
+    this.readClip(track, follow);
+  };
+
+  private unfollowClips = (track: TrackEntry) => {
+    const follow = track.clips;
+    if (!follow) return;
+    track.clips = undefined;
+    this.release([...follow.unsubscribes, ...follow.clipUnsubscribes]);
+    this.store.setInputClip(track.state.id, undefined);
+  };
+
+  /** Reads the followed track's playing clip; requests that come in meanwhile collapse into one more read. */
+  private readClip = (track: TrackEntry, follow: ClipFollow) => {
+    follow.stale = true;
+    if (follow.reading) return;
+    follow.reading = true;
+    void (async () => {
+      while (follow.stale && track.clips === follow && !this.disposed) {
+        follow.stale = false;
+        try {
+          await this.loadClip(track, follow);
+        } catch (error) {
+          console.error(`[live] Failed to read the clip playing on track ${track.state.id}:`, error);
+        }
+      }
+      follow.reading = false;
+    })();
+  };
+
+  private loadClip = async (track: TrackEntry, follow: ClipFollow) => {
+    const trackId = track.state.id;
+    const current = () => track.clips === follow && !this.disposed;
+    const index = toNumber(await this.live.get(`id ${trackId}`, "playing_slot_index", trackId), "playing_slot_index");
+    let raw: RawChild | undefined;
+    let songTime = 0;
+    if (index >= 0) {
+      const slot = (await this.children(`id ${trackId}`, "clip_slots", [], trackId))[index];
+      if (slot) {
+        // The playhead comes with the clip's other properties. Live read it
+        // during the round trip, so it goes with the song position halfway
+        // through, worked out now: later reports would place it too late.
+        const sentAt = performance.now();
+        [raw] = await this.children(`id ${slot.id}`, "clip", clipProps, Number(slot.id));
+        const receivedAt = performance.now();
+        const { transport } = this.store.state;
+        songTime = estimateSongTime(transport, this.store.songTimeAt, receivedAt);
+        if (transport.isPlaying) songTime -= (receivedAt - sentAt) / 2 / msPerBeat(transport);
+      }
+    }
+    if (!current()) return;
+
+    const clipId = raw && toBoolean(raw.is_midi_clip, "is_midi_clip") ? Number(raw.id) : undefined;
+    if (clipId !== follow.clipId) {
+      this.release(follow.clipUnsubscribes);
+      follow.clipUnsubscribes = [];
+      follow.clipId = clipId;
+      if (clipId) {
+        const readAgain = () => this.readClip(track, follow);
+        follow.clipUnsubscribes = await Promise.all(watchedClipProps.map((prop) => this.observe(`id ${clipId}`, prop, clipId, readAgain)));
+        if (!current()) return;
+      }
+    }
+    if (!raw || !clipId) return this.store.setInputClip(trackId, undefined);
+
+    const loopStart = toNumber(raw.loop_start, "loop_start");
+    const loopEnd = toNumber(raw.loop_end, "loop_end");
+    const startMarker = toNumber(raw.start_marker, "start_marker");
+    const endMarker = toNumber(raw.end_marker, "end_marker");
+    const from = Math.min(0, loopStart, startMarker);
+    const span = Math.max(toNumber(raw.length, "length"), loopEnd, endMarker) - from + 1;
+    const result = await this.live.call(`id ${clipId}`, { method: "get_notes_extended", parameters: [0, 128, from, span] }, clipId);
+    if (!current() || follow.clipId !== clipId) return;
+
+    const clip: InputClip = {
+      trackId,
+      clipId,
+      name: toText(raw.name, "name"),
+      notes: toClipNotes(result),
+      looping: toBoolean(raw.looping, "looping"),
+      loopStart,
+      loopEnd,
+      startMarker,
+      endMarker,
+      position: toNumber(raw.playing_position, "playing_position"),
+      songTime,
+    };
+    if ([clip.loopStart, clip.loopEnd, clip.startMarker, clip.endMarker, clip.position].every(Number.isFinite)) {
+      this.store.setInputClip(trackId, clip);
+    }
   };
 
   private loadDevice = async (raw: RawChild): Promise<DeviceEntry> => {

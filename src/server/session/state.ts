@@ -40,6 +40,12 @@ const describePart = (part: PartFeatures) => {
   return `${ROLE_NAMES[part.role]} (${part.trackName}): ${feel}, ${part.onsets} new notes, ${register(part.register)} register, ${loudness(part.velocity)}.`;
 };
 
+/** "Keys", "Bass and Keys", "Bass, Keys and Pad". */
+const listNames = (names: string[]) => {
+  const unique = [...new Set(names)];
+  return unique.length > 1 ? `${unique.slice(0, -1).join(", ")} and ${unique[unique.length - 1]}` : (unique[0] ?? "band's");
+};
+
 /**
  * Sums up what the band is doing as short sentences for the decision model.
  * Every number is worked out here; the model only has to read.
@@ -65,6 +71,7 @@ export const describeState = (analysis: BandAnalysis, transport: TransportState,
   if (next.chord) {
     const how = {
       heard: "heard",
+      clip: `from the ${listNames(next.tracks ?? [])} clip${(next.tracks?.length ?? 0) > 1 ? "s" : ""}`,
       loop: next.confidence >= 0.75 ? "predicted from the repeating chords" : "a guess from the chords starting to repeat",
       held: "a guess: the last chord continuing",
     }[next.source];

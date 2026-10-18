@@ -1,7 +1,8 @@
 import { DeviceState, InputState, TrackState, inputRoles, instruments } from "common";
 import { LiveStore } from "../store";
-import { BandAnalysis, BarRecord, analyzeBand } from "./analyze";
+import { BandAnalysis, BarRecord, InputBar, analyzeBand } from "./analyze";
 import { AudioNotes } from "./audio";
+import { ClipAnchor, InputClip, anchorClip, clipNotesInBar } from "./clips";
 import { beatsPerBar, estimateSongTime, msPerBeat } from "./clock";
 import { loadConfig } from "./config";
 import { InputInfo, Recorder, parseOsc } from "./listen";
@@ -60,6 +61,8 @@ export class SessionEngine {
   private inputs = new Map<number, InputMeta>();
   /** Note detection for each audio input, from its pitch readings. */
   private audio = new Map<number, AudioNotes>();
+  /** The clip playing on each input's track (by track id), tied to the bars counted here. */
+  private clips = new Map<number, { clip: InputClip; anchor: ClipAnchor }>();
   private history: BarRecord[] = [];
   private analysis?: BandAnalysis;
   /** Bar counted from when playback started (1-based); 0 while stopped. */
@@ -75,6 +78,7 @@ export class SessionEngine {
   start = async () => {
     this.store.subscribe((change) => {
       if (change === "tracks") this.reconcile();
+      if (change === "clips") this.anchorClips();
     });
     this.reconcile();
     try {
@@ -164,6 +168,31 @@ export class SessionEngine {
     this.players.set(settings.deviceId, player);
   };
 
+  /**
+   * Ties each newly read clip to the bars counted here, right away: song time
+   * can jump back when the arrangement loops, but bars keep counting.
+   */
+  private anchorClips = () => {
+    const { inputClips } = this.store;
+    for (const trackId of [...this.clips.keys()]) if (!inputClips.has(trackId)) this.clips.delete(trackId);
+    if (!this.wasPlaying) return;
+    inputClips.forEach((clip, trackId) => {
+      if (this.clips.get(trackId)?.clip === clip) return;
+      this.clips.set(trackId, { clip, anchor: anchorClip(clip, this.bar, this.barStartBeat) });
+    });
+  };
+
+  /** What the clips on the inputs' tracks will play in a bar, for the inputs that are on. */
+  private upcoming = (index: number): InputBar[] => {
+    const bpb = beatsPerBar(this.store.state.transport);
+    return [...this.inputs.values()].flatMap((input) => {
+      const playing = this.clips.get(input.trackId);
+      if (!input.on || input.kind !== "midi" || !playing) return [];
+      const notes = clipNotesInBar(playing.clip, playing.anchor, index, bpb);
+      return [{ deviceId: input.deviceId, trackName: input.trackName, role: input.role, notes }];
+    });
+  };
+
   private inputInfos = (): InputInfo[] => {
     return [...this.inputs.values()].filter((input) => input.on).map(({ deviceId, trackName, role }) => ({ deviceId, trackName, role }));
   };
@@ -187,7 +216,7 @@ export class SessionEngine {
     const bpb = beatsPerBar(transport);
     const now = estimateSongTime(transport, this.store.songTimeAt);
     const partial = this.recorder.peekBar(this.bar, this.barStartBeat, bpb, this.inputInfos(), now);
-    return analyzeBand([...this.history.slice(-ANALYSIS_BARS), partial]);
+    return analyzeBand([...this.history.slice(-ANALYSIS_BARS), partial], this.upcoming);
   };
 
   private tick = () => {
@@ -215,6 +244,8 @@ export class SessionEngine {
     this.history = [];
     this.analysis = undefined;
     this.recorder.reset();
+    this.clips.clear();
+    this.anchorClips();
     this.players.forEach((player) => player.start());
     this.publish();
   };
@@ -223,7 +254,7 @@ export class SessionEngine {
     const staleMs = 3 * bpb * msPerBeat(this.store.state.transport);
     const record = this.recorder.closeBar(this.bar, this.barStartBeat, bpb, this.inputInfos(), staleMs);
     this.history = [...this.history, record].slice(-HISTORY_BARS);
-    this.analysis = analyzeBand(this.history.slice(-ANALYSIS_BARS));
+    this.analysis = analyzeBand(this.history.slice(-ANALYSIS_BARS), this.upcoming);
     this.bar++;
     this.songBar = songBar;
     this.barStartBeat = songBar * bpb;
@@ -233,6 +264,7 @@ export class SessionEngine {
   private onStop = () => {
     this.wasPlaying = false;
     this.bar = 0;
+    this.clips.clear();
     this.players.forEach((player) => player.stop());
     this.publish();
   };

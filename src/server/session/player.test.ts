@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Note } from "tonal";
 import { initialTransport } from "common";
-import { BarRecord, analyzeBand } from "./analyze";
+import { BarRecord, UpcomingNotes, analyzeBand } from "./analyze";
 import { defaultConfig } from "./config";
 import { ClipSlotInfo, ClipSpec, LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing, msUntilBar } from "./player";
@@ -79,9 +79,11 @@ class FakeLive implements LiveOps {
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-const setup = (options: { provider?: DecisionProvider; chords?: (bar: number) => string[] } = {}) => {
+const setup = (options: { provider?: DecisionProvider; chords?: (bar: number) => string[]; clips?: boolean } = {}) => {
   const live = new FakeLive();
   const chords = options.chords ?? ((bar: number) => LOOP[(bar - 1) % 4]);
+  // With clips, the band's Keys clip says what every bar will play.
+  const upcoming: UpcomingNotes | undefined = options.clips ? (bar) => bandBar(bar, chords(bar)).inputs : undefined;
   const player = new Player(settings, {
     config: defaultConfig,
     provider: options.provider ?? localProvider,
@@ -91,7 +93,7 @@ const setup = (options: { provider?: DecisionProvider; chords?: (bar: number) =>
       analyzeBand([
         ...Array.from({ length: live.clock.bar - 1 }, (_, i) => bandBar(i + 1, chords(i + 1))),
         bandBar(live.clock.bar, chords(live.clock.bar), true),
-      ]),
+      ], upcoming),
     transport: () => ({ ...initialTransport, isPlaying: live.clock.playing }),
     timing: () => live.clock,
     onChange: () => {},
@@ -136,6 +138,13 @@ describe("Player", () => {
     // The loop Am7 Fmaj7 C G: from bar 6 on, the player has heard it come round
     // again and predicts each next chord.
     expect([6, 7, 8, 9].map(chordFor)).toEqual(["Fmaj7", "C", "G", "Am7"]);
+  });
+
+  test("with the band playing clips, renders the coming bar's chord from the first bar it plays", async () => {
+    const { live, playUntil } = setup({ clips: true });
+    await playUntil(7);
+    const chordFor = (bar: number) => live.writes.find((write) => write.spec.name.startsWith(`SP ${bar} `))?.spec.name.split(" ")[3];
+    expect([2, 3, 4, 5, 6].map(chordFor)).toEqual(["Fmaj7", "C", "G", "Am7", "Fmaj7"]);
   });
 
   test("never writes into the slot that is playing", async () => {

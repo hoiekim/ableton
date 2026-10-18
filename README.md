@@ -37,11 +37,20 @@ decision as a MIDI clip that Live starts on the next bar.
 How it decides: the server sums up the band as text (chords, predicted next
 chord, key, rhythm, energy, where the phrase is) and asks a decision model to
 pick one of the instrument's patterns, an energy level and whether to fill. The
-pattern is then played on the right chords. By default fast local rules decide;
-with `TYPESAFE_API_KEY` set (for example in a `.env` file in the project folder,
-which Bun reads at startup), TypeSafe's [Jev](https://docs.typesafe.ai) does,
-falling back to the rules when it's unsure or too slow. If Jev takes longer
-than a bar, raise the device's Lookahead.
+pattern is then played on the right chords.
+
+The next bar's chord comes from the band's clips when it plays them: for each
+MIDI track with a Session Input, the server reads the clip that's playing (and
+reads it again when its notes or loop change), so the player is on the right
+chord from its first bar. What's played live can only be predicted from what's
+been heard, so there the player follows once the progression has come round
+once. A clip the band launches mid-jam is read when it starts, so its first bar
+is still a guess.
+
+By default fast local rules decide; with `TYPESAFE_API_KEY` set (for example
+in a `.env` file in the project folder, which Bun reads at startup), TypeSafe's
+[Jev](https://docs.typesafe.ai) does, falling back to the rules when it's unsure
+or too slow. If Jev takes longer than a bar, raise the device's Lookahead.
 
 How it all fits together, and how it was tested: [docs/DESIGN.md](docs/DESIGN.md).
 
@@ -110,4 +119,31 @@ curl 'http://127.0.0.1:9001/mock?action=band-chords&chords=Dm7,G7,Cmaj7,Cmaj7'
 curl 'http://127.0.0.1:9001/mock?action=clips'
 ```
 
-`MOCK_BAND=0` silences the band and `MOCK_CLIP_LOG=0` the clip log.
+The band can also play from clips, the way the server reads ahead: `band-clips`
+writes its parts as looping clips on Bass and Keys (Vocals stays scripted), and
+`scene` launches them; launched while stopped, the clips and the transport
+start together. Each Session Input then forwards what its track's clip plays.
+Running `band-clips` again while they play edits the clips in place.
+
+```bash
+curl 'http://127.0.0.1:9001/mock?action=band-clips&chords=Am7,Fmaj7,C,G'
+```
+
+```bash
+curl 'http://127.0.0.1:9001/mock?action=scene&scene=0'
+```
+
+`MOCK_BAND=0` silences the scripted band (clips still play) and
+`MOCK_CLIP_LOG=0` the clip log.
+
+`bun run jam-check` does all of this on its own ports (9201, 9202 and 3201, so
+it can run next to Live or another mock): it starts the mock and the server,
+has the band play, and checks the chord of every clip the AI Guitar fires
+against the band's. `--band live` uses the scripted band instead of clips,
+`--tempo 80,120,160` runs several tempos, `--bars`, `--chords` and
+`--edit 6:Dm7,G7,Cmaj7,Am7` (rewrite the clips mid-jam) set up the jam, and
+`--log` prints the mock's clip log.
+
+```bash
+bun run jam-check -- --tempo 80,120,160 --bars 12
+```

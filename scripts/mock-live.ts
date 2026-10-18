@@ -9,8 +9,10 @@
  *
  * MOCK_VERBOSE=1 logs every request, MOCK_LATENCY=<ms> delays every reply.
  * While the transport plays, a scripted band sends Session Input notes over OSC
- * to MOCK_OSC_PORT (default 9101); MOCK_BAND=0 turns it off. MOCK_CLIP_LOG=0
- * stops the per-bar log of what each clip plays.
+ * to MOCK_OSC_PORT (default 9101); MOCK_BAND=0 turns it off. A Session Input
+ * on a track that plays a clip forwards the clip's notes instead, as the real
+ * device does (see the band-clips and scene actions). MOCK_CLIP_LOG=0 stops
+ * the per-bar log of what each clip plays.
  *
  * Behaviour follows the bridge's own scripts (live-api.js and
  * node-live-api.js inside LiveAPI.amxd), quirks included.
@@ -91,6 +93,7 @@ const READ_ONLY_PROPS = new Set([
   "fired_slot_index",
   "is_quantized",
   "value_items",
+  "notes",
 ]);
 
 /** Children that are a single object rather than a list, so their path has no index. */
@@ -409,6 +412,11 @@ const handleLiveOutput = (prop: string, value: unknown, isBool: boolean) => {
 
 /** What LiveAPI's get() returns, which is always a list. */
 const rawGet = (obj: LiveObject, prop: string): unknown[] | undefined => {
+  // Live's playhead runs on between the mock's clock ticks.
+  if (obj.kind === "clip" && prop === "playing_position") {
+    const current = playing.get(parentOf(parentOf(obj)!)?.id ?? -1);
+    if (current?.clip === obj) return [clipPosition(current, songTimeNow())];
+  }
   const ids = obj.children[prop];
   // Live reports an empty single child (a slot without a clip) as id 0.
   if (ids && !ids.length && SINGLE_CHILDREN.has(prop)) return ["id", 0];
@@ -534,7 +542,7 @@ const parentOf = (obj: LiveObject) => (obj.parent !== undefined ? objects.get(ob
 const clipIn = (slot: LiveObject) => objects.get(slot.children.clip?.[0] ?? -1);
 const slotIndex = (slot: LiveObject) => parentOf(slot)!.children.clip_slots.indexOf(slot.id);
 
-const launch = (slot: LiveObject, override?: number) => {
+const launch = (slot: LiveObject, override?: number, startAt?: number) => {
   const track = parentOf(slot)!;
   const clip = clipIn(slot);
   if (!clip) {
@@ -549,7 +557,7 @@ const launch = (slot: LiveObject, override?: number) => {
   // Launching a clip while stopped starts the transport, as in Live.
   const wasStopped = !song.props.is_playing;
   if (wasStopped) update(song, "is_playing", true);
-  const at = wasStopped ? Number(song.props.current_song_time) : nextLaunchPoint(quantization);
+  const at = startAt ?? (wasStopped ? Number(song.props.current_song_time) : nextLaunchPoint(quantization));
   const previous = launches.get(track.id);
   if (previous && previous.slot !== slot) {
     update(previous.slot, "is_triggered", false);
@@ -566,6 +574,7 @@ const launch = (slot: LiveObject, override?: number) => {
 const stopClip = (trackId: number) => {
   const current = playing.get(trackId);
   if (!current) return;
+  cutInputNotes(trackId, Number(song.props.current_song_time));
   playing.delete(trackId);
   update(current.clip, "is_playing", false);
   update(current.slot, "is_playing", false);
@@ -580,6 +589,8 @@ const startClip = (track: LiveObject, slot: LiveObject, at: number) => {
   if (!clip) return;
   const current = playing.get(track.id);
   if (current && current.clip !== clip) stopClip(track.id);
+  // From here the track's Session Input hears the clip, not the scripted band.
+  cutInputNotes(track.id, at);
   playing.set(track.id, { slot, clip, startedAt: at });
   update(clip, "is_triggered", false);
   update(clip, "is_playing", true);
@@ -680,6 +691,8 @@ const slotMethods: Record<string, Method> = {
         start_marker: 0,
         end_marker: beats,
         launch_quantization: 0,
+        // Only observed: Live notifies when the clip's notes change.
+        notes: 0,
         is_playing: false,
         is_triggered: false,
         playing_position: 0,
@@ -739,12 +752,16 @@ const clipMethods: Record<string, Method> = {
       };
     });
     clipNotes.get(clip.id)!.push(...added);
+    update(clip, "notes", Number(clip.props.notes) + 1);
     return added.map((note) => note.note_id);
   },
   remove_notes_extended: (clip, [fromPitch, pitchSpan, fromTime, timeSpan]) => {
     const keep = (note: Note) =>
       !(inRange(note.pitch, Number(fromPitch), Number(pitchSpan)) && inRange(note.start_time, Number(fromTime), Number(timeSpan)));
-    clipNotes.set(clip.id, clipNotes.get(clip.id)!.filter(keep));
+    const before = clipNotes.get(clip.id)!;
+    const kept = before.filter(keep);
+    clipNotes.set(clip.id, kept);
+    if (kept.length !== before.length) update(clip, "notes", Number(clip.props.notes) + 1);
   },
   get_notes_extended: (clip, [fromPitch, pitchSpan, fromTime, timeSpan]) => {
     const notes = clipNotes
@@ -914,7 +931,8 @@ const parseChord = (symbol: string) => {
   return { root, intervals };
 };
 
-let bandChords = ["Am7", "Fmaj7", "C", "G"].map((symbol) => parseChord(symbol)!);
+let bandSymbols = ["Am7", "Fmaj7", "C", "G"];
+let bandChords = bandSymbols.map((symbol) => parseChord(symbol)!);
 let bandOn = process.env.MOCK_BAND !== "0";
 
 interface BandEvent {
@@ -926,6 +944,12 @@ interface BandEvent {
 
 let bandQueue: BandEvent[] = [];
 let lastTick = performance.now();
+
+/** The song position now, between the clock's ticks. */
+const songTimeNow = () => {
+  const time = Number(song.props.current_song_time);
+  return song.props.is_playing ? time + ((performance.now() - lastTick) / 60000) * Number(song.props.tempo) : time;
+};
 let bandScheduledBar = -1;
 const sounding = new Map<string, BandEvent>();
 const udp = await Bun.udpSocket({});
@@ -961,7 +985,7 @@ const oscMessage = (address: string, args: (["i" | "f", number] | ["s", string])
 
 /** The Session Input devices in the set, with their role and whether they're MIDI or audio. */
 const inputDevices = () => {
-  const found: { id: number; role: string; kind: "midi" | "audio" }[] = [];
+  const found: { id: number; role: string; kind: "midi" | "audio"; trackId?: number }[] = [];
   objects.forEach((obj) => {
     if (obj.kind !== "device") return;
     const params = (obj.children.parameters ?? []).map((id) => objects.get(id)!);
@@ -972,6 +996,7 @@ const inputDevices = () => {
       id: obj.id,
       role: ROLES[Number(role.props.value)],
       kind: obj.props.class_name === "MxDeviceAudioEffect" ? "audio" : "midi",
+      trackId: parentOf(obj)?.id,
     });
   });
   return found;
@@ -998,32 +1023,97 @@ const sendNote = ({ deviceId, pitch, velocity, beat }: BandEvent) => {
 
 const pitchAbove = (pc: number, low: number) => low + ((pc - low + 120) % 12);
 
-/** One bar of the band: bass in eighths, held chords, and a simple melody. */
+type Chord = NonNullable<ReturnType<typeof parseChord>>;
+
+/** One bar of a part over a chord, in beats from the bar's start: bass in eighths, held chords, or a simple melody. */
+const partNotes = (role: string, chord: Chord, length: number) => {
+  const tones = chord.intervals.map((interval) => (chord.root + interval) % 12);
+  const notes: { pitch: number; start: number; duration: number; velocity: number }[] = [];
+  const note = (pitch: number, start: number, duration: number, velocity: number) => notes.push({ pitch, start, duration, velocity });
+  if (role === "Bass") {
+    const root = pitchAbove(chord.root, 33);
+    const fifth = root + 7;
+    [root, root, fifth, root, root, root, fifth, root + 12].forEach((pitch, i) => {
+      if (i * 0.5 < length) note(pitch, i * 0.5, 0.45, i % 2 ? 80 : 96);
+    });
+  } else if (role === "Chords") {
+    tones.map((pc) => pitchAbove(pc, 57)).forEach((pitch) => note(pitch, 0, length - 0.1, 70));
+  } else if (role === "Melody") {
+    const line = [pitchAbove(tones[1], 64), pitchAbove(tones[2], 64), pitchAbove(tones[0], 69)];
+    line.forEach((pitch, i) => note(pitch, i, i === 2 ? 1.5 : 0.9, 84));
+  }
+  return notes;
+};
+
+/** A MIDI input whose track plays (or is about to play) a clip forwards the clip instead of the scripted part. */
+const followsClip = (input: ReturnType<typeof inputDevices>[number]) => {
+  return input.kind === "midi" && input.trackId !== undefined && (playing.has(input.trackId) || launches.has(input.trackId));
+};
+
+/** One bar of the scripted band, for the inputs not playing clips. */
 const bandBar = (bar: number): BandEvent[] => {
   const length = beatsPerBar();
   const start = bar * length;
   const chord = bandChords[((bar % bandChords.length) + bandChords.length) % bandChords.length];
-  const tones = chord.intervals.map((interval) => (chord.root + interval) % 12);
   const events: BandEvent[] = [];
-  const note = (deviceId: number, pitch: number, at: number, duration: number, velocity: number) => {
-    events.push({ deviceId, pitch, velocity, beat: start + at }, { deviceId, pitch, velocity: 0, beat: start + at + duration });
-  };
   for (const input of inputDevices()) {
-    if (input.role === "Bass") {
-      const root = pitchAbove(chord.root, 33);
-      const fifth = root + 7;
-      [root, root, fifth, root, root, root, fifth, root + 12].forEach((pitch, i) => {
-        if (i * 0.5 < length) note(input.id, pitch, i * 0.5, 0.45, i % 2 ? 80 : 96);
-      });
-    } else if (input.role === "Chords") {
-      const voicing = tones.map((pc) => pitchAbove(pc, 57));
-      voicing.forEach((pitch) => note(input.id, pitch, 0, length - 0.1, 70));
-    } else if (input.role === "Melody") {
-      const line = [pitchAbove(tones[1], 64), pitchAbove(tones[2], 64), pitchAbove(tones[0], 69)];
-      line.forEach((pitch, i) => note(input.id, pitch, i, i === 2 ? 1.5 : 0.9, 84));
+    if (followsClip(input)) continue;
+    for (const note of partNotes(input.role, chord, length)) {
+      const beat = start + note.start;
+      events.push(
+        { deviceId: input.id, pitch: note.pitch, velocity: note.velocity, beat },
+        { deviceId: input.id, pitch: note.pitch, velocity: 0, beat: beat + note.duration }
+      );
     }
   }
   return events;
+};
+
+/**
+ * Queues what each MIDI Session Input hears from the clip playing on its
+ * track during song beats [from, to): every pass of a looping clip plays its
+ * notes again, cut at the loop end.
+ */
+const forwardClips = (from: number, to: number) => {
+  for (const input of inputDevices()) {
+    const current = input.kind === "midi" && input.trackId !== undefined ? playing.get(input.trackId) : undefined;
+    if (!current) continue;
+    const { clip, startedAt } = current;
+    const looping = !!clip.props.looping;
+    // Same playhead as clipPosition: a looping clip starts at its loop start, any other at 0.
+    const first = looping ? Number(clip.props.loop_start) : 0;
+    const end = looping ? Number(clip.props.loop_end) : Number(clip.props.end_marker);
+    const loopLength = end - first;
+    const elapsedFrom = Math.max(from, startedAt) - startedAt;
+    const elapsedTo = to - startedAt;
+    if (elapsedTo <= elapsedFrom || loopLength <= 0) continue;
+    for (const note of clipNotes.get(clip.id) ?? []) {
+      if (note.mute || note.start_time < first || note.start_time >= end) continue;
+      const offset = note.start_time - first;
+      const duration = Math.min(note.duration, end - note.start_time);
+      const pass = looping ? Math.max(0, Math.ceil((elapsedFrom - offset) / loopLength - 1e-9)) : 0;
+      for (let k = pass; looping || k === 0; k++) {
+        const elapsed = offset + k * loopLength;
+        if (elapsed >= elapsedTo - 1e-9) break;
+        if (elapsed < elapsedFrom - 1e-9) continue;
+        const beat = startedAt + elapsed;
+        bandQueue.push(
+          { deviceId: input.id, pitch: note.pitch, velocity: note.velocity, beat },
+          { deviceId: input.id, pitch: note.pitch, velocity: 0, beat: beat + duration }
+        );
+      }
+    }
+  }
+};
+
+/** Drops what a track's MIDI inputs had queued from `at` on and ends their sounding notes there. */
+const cutInputNotes = (trackId: number, at: number) => {
+  const inputs = new Set(inputDevices().filter((input) => input.kind === "midi" && input.trackId === trackId).map((input) => input.id));
+  if (!inputs.size) return;
+  bandQueue = bandQueue.filter((event) => !inputs.has(event.deviceId) || event.beat < at);
+  sounding.forEach((event) => {
+    if (inputs.has(event.deviceId)) bandQueue.push({ ...event, velocity: 0, beat: at });
+  });
 };
 
 const allNotesOff = () => {
@@ -1037,7 +1127,7 @@ const allNotesOff = () => {
 // Audio inputs: a pitch reading every 10 ms, with a little vibrato, and a noise floor between notes.
 setInterval(() => {
   if (!song.props.is_playing || !bandOn) return;
-  const beat = Number(song.props.current_song_time) + ((performance.now() - lastTick) / 60000) * Number(song.props.tempo);
+  const beat = songTimeNow();
   for (const input of inputDevices()) {
     if (input.kind !== "audio") continue;
     const pitch = audioPitch.get(input.id);
@@ -1047,14 +1137,18 @@ setInterval(() => {
   }
 }, 10);
 
-/** Sends the band's notes that are due by `time`, scheduling bars as the song reaches them. */
-const playBand = (time: number) => {
+/** Schedules the scripted band's bars as the song reaches them. */
+const scheduleBand = (time: number) => {
   const bar = Math.floor(time / beatsPerBar() + 1e-9);
   if (bandScheduledBar < bar - 1 || bandScheduledBar > bar + 1) bandScheduledBar = bar - 1;
   while (bandScheduledBar < bar + 1) {
     bandScheduledBar++;
     bandQueue.push(...bandBar(bandScheduledBar));
   }
+};
+
+/** Sends the queued notes that are due by `time`. */
+const sendDue = (time: number) => {
   bandQueue.sort((a, b) => a.beat - b.beat);
   while (bandQueue.length && bandQueue[0].beat <= time) {
     const event = bandQueue.shift()!;
@@ -1111,10 +1205,11 @@ setInterval(() => {
   update(song, "current_song_time", time);
   const bar = beatsPerBar();
   if (wrapped || Math.floor(time / bar + 1e-9) !== Math.floor(previous / bar + 1e-9)) logBar(Math.floor(time / bar + 1e-9) * bar);
-  if (bandOn) {
-    if (wrapped) allNotesOff();
-    playBand(time);
-  }
+  if (wrapped) allNotesOff();
+  // Clip time doesn't follow the arrangement loop back, so a wrap skips a tick.
+  else forwardClips(previous, time);
+  if (bandOn) scheduleBand(time);
+  sendDue(time);
 }, CLOCK_INTERVAL);
 
 // ---- Control endpoint ----
@@ -1179,6 +1274,13 @@ const trackKind = (obj: LiveObject, list: string): TrackKind => {
 };
 
 const trackColors = [0x00c9b7, 0xff94a6, 0xffff00, 0x1aff2f, 0x5480e4, 0xff3a34];
+
+const setBandChords = (list: string) => {
+  const symbols = list.split(",").map((symbol) => symbol.trim());
+  const chords = symbols.map((symbol) => parseChord(symbol) ?? reject(`Can't read chord "${symbol}"; use e.g. Am7, Fmaj7, G7, C`));
+  bandSymbols = symbols;
+  bandChords = chords;
+};
 
 const actions: Record<string, (query: URLSearchParams) => string> = {
   "add-device": (query) => {
@@ -1285,10 +1387,52 @@ const actions: Record<string, (query: URLSearchParams) => string> = {
     return "band off";
   },
   "band-chords": (query) => {
-    const symbols = requireParam(query, "chords").split(",");
-    const chords = symbols.map((symbol) => parseChord(symbol) ?? reject(`Can't read chord "${symbol}"; use e.g. Am7, Fmaj7, G7, C`));
-    bandChords = chords;
-    return `band chords: ${symbols.join(" ")}`;
+    setBandChords(requireParam(query, "chords"));
+    return `band chords: ${bandSymbols.join(" ")}`;
+  },
+  "band-clips": (query) => {
+    if (query.has("chords")) setBandChords(requireParam(query, "chords"));
+    const index = indexParam(query, "slot", 0);
+    const length = beatsPerBar();
+    const written: string[] = [];
+    for (const input of inputDevices()) {
+      const track = input.kind === "midi" && input.trackId !== undefined ? objects.get(input.trackId) : undefined;
+      const notes = bandChords.flatMap((chord, bar) =>
+        partNotes(input.role, chord, length).map((note) => ({ ...note, start_time: bar * length + note.start }))
+      );
+      if (!track || !notes.length) continue;
+      const slot = objects.get(track.children.clip_slots?.[index] ?? -1) ?? reject(`No slot ${index} on ${describe(track)}`);
+      const clipLength = bandChords.length * length;
+      const existing = clipIn(slot);
+      // A clip of the same length is edited in place, so one that's playing plays on.
+      if (existing && Number(existing.props.length) === clipLength) clipMethods.remove_notes_extended(existing, [0, 128, 0, clipLength + 1]);
+      else {
+        if (existing) slotMethods.delete_clip(slot, []);
+        slotMethods.create_clip(slot, [clipLength]);
+      }
+      const clip = clipIn(slot)!;
+      clipMethods.add_new_notes(clip, [{ notes }]);
+      update(clip, "name", `Band ${bandSymbols.join(" ")}`);
+      written.push(`${track.props.name} slot ${index + 1}`);
+    }
+    if (!written.length) reject("No MIDI track has a Session Input with a Bass, Chords or Melody role");
+    return `band clips (${bandSymbols.join(" ")}): ${written.join(", ")}`;
+  },
+  scene: (query) => {
+    const index = indexParam(query, "scene", 0);
+    // Launched while stopped, every clip starts together with the transport.
+    const startAt = song.props.is_playing ? undefined : Number(song.props.current_song_time);
+    const tracks = song.children.tracks.map((id) => objects.get(id)!).filter((track) => track.children.clip_slots?.[index]);
+    if (!tracks.length) reject(`No scene ${index}`);
+    tracks.forEach((track) => launch(objects.get(track.children.clip_slots[index])!, undefined, startAt));
+    return `launched scene ${index + 1}`;
+  },
+  fire: (query) => {
+    const track = trackParam(query);
+    const index = indexParam(query, "slot", 0);
+    const slot = objects.get(track.children.clip_slots?.[index] ?? -1) ?? reject(`No slot ${index} on ${describe(track)}`);
+    launch(slot);
+    return `fired slot ${index + 1} on ${describe(track)}`;
   },
   clips: () => {
     const lines: string[] = [];
@@ -1372,6 +1516,9 @@ const help = () => {
     "  band-start     the scripted band sends Session Input notes while playing",
     "  band-stop      silence the scripted band",
     "  band-chords    chords=Am7,Fmaj7,C,G (one per bar, looped)",
+    "  band-clips     [chords], [slot=0]: the band's parts as looping clips on its MIDI tracks",
+    "  scene          scene=<index>: fire that slot on every track (stopped: starts together)",
+    "  fire           track, slot: fire one clip slot",
     "  drop           cut every connection, like Live crashing",
     "  down           seconds: stop listening for a while, like Live quitting",
     "  state          JSON: observers and recent warnings",
