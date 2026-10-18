@@ -1,6 +1,6 @@
 import { DecisionLog, Instrument, PlayerState, PlayerStatus, TransportState } from "common";
 import { BandAnalysis } from "./analyze";
-import { p90 } from "./clock";
+import { p90, slowest } from "./clock";
 import { SessionConfig } from "./config";
 import { ChordInfo, ClipNote, clamp, hashString, seededRandom, triad } from "./music";
 import { ClipSlotInfo, LiveOps } from "./ops";
@@ -178,7 +178,7 @@ export class Player {
 
     // Decide each bar as late as the expected decision and write times allow.
     // Lookahead caps how early, and so how many decisions run at once.
-    const lead = this.decisionEstimate() + this.writeEstimate() + this.deps.config.timing.fireMarginMs + TICK_SLACK_MS;
+    const lead = this.decisionLead() + this.writeEstimate() + this.deps.config.timing.fireMarginMs + TICK_SLACK_MS;
     const earliest = this.settings.lookahead * timing.beatsPerBar * timing.msPerBeat;
     while (this.pending.size < this.settings.lookahead && msUntilBar(this.nextBar, timing) <= Math.min(lead, earliest)) {
       const bar = this.nextBar;
@@ -214,14 +214,20 @@ export class Player {
     const timing = this.deps.timing();
     const { provider, config } = this.deps;
     if (provider.name === "local" || !timing.playing || !this.settings.active) return undefined;
-    const needed = this.decisionEstimate() + this.writeEstimate() + config.timing.fireMarginMs;
+    const needed = this.decisionLead() + this.writeEstimate() + config.timing.fireMarginMs;
     const allowed = this.settings.lookahead * timing.beatsPerBar * timing.msPerBeat;
     if (needed <= allowed) return undefined;
     const bars = Math.ceil(needed / (timing.beatsPerBar * timing.msPerBeat));
-    return `${provider.name} takes about ${Math.round(this.decisionEstimate())} ms, so local rules decide; set Lookahead to ${bars} to use it`;
+    return `${provider.name} takes up to ${Math.round(this.decisionLead())} ms, so local rules decide; set Lookahead to ${bars} to use it`;
   };
 
   private decisionEstimate = () => p90(this.decisionSamples, this.deps.config.timing.initialDecisionMs);
+
+  /**
+   * How long to allow for a decision: the slowest recent one. Network answers
+   * have long tails, and an answer that misses its bar is wasted.
+   */
+  private decisionLead = () => slowest(this.decisionSamples, this.deps.config.timing.initialDecisionMs);
 
   private writeEstimate = () => p90(this.writeSamples, this.deps.config.timing.initialWriteMs);
 
@@ -357,7 +363,9 @@ export class Player {
     const patterns = this.patterns();
     const pattern = patterns.find((p) => p.id === decision.pattern) ?? patterns.find((p) => p.id === decideLocally(request).pattern)!;
     const { chords, next } = this.chordsFor(bar, request.analysis);
-    const fill = decision.fill && bar - this.lastFillBar >= 2;
+    // Fills belong in the last bar of a phrase, leading into the next one.
+    const endsPhrase = (bar + length - 1) % config.phraseLength === 0;
+    const fill = decision.fill && endsPhrase && bar - this.lastFillBar >= 2;
     const accent = !!this.playing?.fill && this.settings.instrument === "drums";
     const signature = [pattern.id, decision.energy, chords.map((c) => c.symbol).join(","), fill, accent, length].join("|");
 

@@ -49,7 +49,7 @@ export const buildQuestions = (request: DecisionRequest, config: SessionConfig["
     }),
     fill: {
       type: "noul",
-      instructions: `${preamble}The next bar is a good moment for a fill: the end of a phrase or a transition into a new section.`,
+      instructions: `${preamble}Play a fill in the next bar. Fills go in the last bar of a phrase, leading into the next phrase or a new section; never in a bar that starts a phrase.`,
     },
   };
 };

@@ -118,6 +118,12 @@ describe("analyzeBand", () => {
     expect(keys).toMatchObject({ role: "chords", onsets: 4 });
   });
 
+  test("reads slightly early or late notes as on the grid", () => {
+    const early = bar(1, LOOP[0]);
+    early.inputs[0].notes = early.inputs[0].notes.map((note, i) => ({ ...note, start: note.start + (i % 2 ? -0.01 : 0.01) }));
+    expect(analyzeBand([early]).bars[0].parts[0].grid).toBe("x.x.x.x.x.x.x.x.");
+  });
+
   test("holds the last chord when there's no loop yet", () => {
     const short = analyzeBand([bar(1, LOOP[0]), bar(2, LOOP[1])]);
     expect(short.chordAt(3)).toMatchObject({ predicted: true, chord: { symbol: "Fmaj7" } });

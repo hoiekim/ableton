@@ -110,7 +110,8 @@ const describePart = (input: InputBar, beatsPerBar: number): PartFeatures => {
   const { notes } = input;
   const onsets = notes.filter((note) => !note.held);
   const grid = Array.from({ length: STEPS }, () => ".");
-  for (const note of onsets) grid[clamp(Math.floor((note.start / beatsPerBar) * STEPS), 0, STEPS - 1)] = "x";
+  // Nearest step, not the one below: players land a little early or late.
+  for (const note of onsets) grid[clamp(Math.round((note.start / beatsPerBar) * STEPS), 0, STEPS - 1)] = "x";
   const velocity = onsets.length ? onsets.reduce((sum, note) => sum + note.velocity, 0) / onsets.length : 0;
   return {
     deviceId: input.deviceId,

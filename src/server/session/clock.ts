@@ -13,6 +13,9 @@ export const estimateSongTime = (transport: TransportState, reportedAt: number, 
   return transport.songTime + Math.max(now - reportedAt, 0) / msPerBeat(transport);
 };
 
+/** The slowest of recent samples, or `fallback` before there are any. */
+export const slowest = (samples: number[], fallback: number) => (samples.length ? Math.max(...samples) : fallback);
+
 /** 90th percentile of recent samples, or `fallback` before there are any. */
 export const p90 = (samples: number[], fallback: number) => {
   if (!samples.length) return fallback;

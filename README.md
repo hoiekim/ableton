@@ -38,9 +38,12 @@ How it decides: the server sums up the band as text (chords, predicted next
 chord, key, rhythm, energy, where the phrase is) and asks a decision model to
 pick one of the instrument's patterns, an energy level and whether to fill. The
 pattern is then played on the right chords. By default fast local rules decide;
-with `TYPESAFE_API_KEY` set, TypeSafe's [Jev](https://docs.typesafe.ai) does,
+with `TYPESAFE_API_KEY` set (for example in a `.env` file in the project folder,
+which Bun reads at startup), TypeSafe's [Jev](https://docs.typesafe.ai) does,
 falling back to the rules when it's unsure or too slow. If Jev takes longer
 than a bar, raise the device's Lookahead.
+
+How it all fits together, and how it was tested: [docs/DESIGN.md](docs/DESIGN.md).
 
 Everything is adjustable in [session.config.ts](session.config.ts): the
 decision model, timing margins, clip slots, phrase length, and your own
