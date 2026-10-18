@@ -39,9 +39,14 @@ const PlayerCard = ({ player }: { player: PlayerState }) => {
     <article className={`PlayerCard ${player.status}`}>
       <header className="playerHeader">
         <span className="playerTrack">{player.trackName}</span>
-        <span className="playerInstrument">{capitalize(player.instrument)}</span>
+        <span className="playerInstrument">
+          {player.instrumentSetting === "auto" ? `Auto · ${capitalize(player.instrument)}` : capitalize(player.instrument)}
+        </span>
         <span className={`statusPill ${player.status}`}>{statusLabels[player.status]}</span>
       </header>
+      <p className="playerSound" title={player.sound?.summary}>
+        {player.sound ? player.sound.summary : "No instrument found after the Session Player."}
+      </p>
       {player.message && <p className="playerMessage">{player.message}</p>}
       {latest ? <Decision log={latest} /> : <p className="playerMessage">No decisions yet.</p>}
       <dl className="playerStats">

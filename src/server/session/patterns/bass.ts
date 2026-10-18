@@ -50,6 +50,7 @@ export const bass: Pattern[] = [
       description: "Long held root note for the whole bar. Calm and spacious; for ballads, intros and pads.",
       energy: [1, 3],
       suits: "busy",
+      articulation: "sustained",
     },
     (context, chord) => [note(root(chord), 0, context.beatsPerBar * 0.95, velocity(context))]
   ),
@@ -59,6 +60,7 @@ export const bass: Pattern[] = [
       description: "Root note on every beat. Simple and steady; locks the harmony down without getting busy.",
       energy: [3, 6],
       suits: "any",
+      articulation: "rhythmic",
     },
     (context, chord) => beats(context).map((t) => note(root(chord), t, context.beatLength * 0.85, velocity(context, t ? -4 : 6)))
   ),
@@ -68,6 +70,7 @@ export const bass: Pattern[] = [
       description: "Driving eighth notes on the root. Rock and punk energy; pushes the band forward.",
       energy: [5, 9],
       suits: "any",
+      articulation: "busy",
     },
     (context, chord) => grid(context, 0.5).map((t, i) => note(root(chord), t, 0.4, velocity(context, i % 2 ? -8 : 2)))
   ),
@@ -77,6 +80,7 @@ export const bass: Pattern[] = [
       description: "Root on the strong beats, fifth on the others. Country, folk and two-beat feel; bouncy but simple.",
       energy: [3, 6],
       suits: "any",
+      articulation: "rhythmic",
     },
     (context, chord) => beats(context).map((t, i) => note(i % 2 ? fifth(chord) - 12 : root(chord), t, context.beatLength * 0.8, velocity(context, i % 2 ? -6 : 6)))
   ),
@@ -86,6 +90,7 @@ export const bass: Pattern[] = [
       description: "Eighth notes jumping between the root and its octave. Disco and dance; very rhythmic and bright.",
       energy: [6, 10],
       suits: "sparse",
+      articulation: "busy",
     },
     (context, chord) => grid(context, 0.5).map((t, i) => note(root(chord) + (i % 2 ? 12 : 0), t, 0.35, velocity(context, i % 2 ? -4 : 4)))
   ),
@@ -95,6 +100,7 @@ export const bass: Pattern[] = [
       description: "Walking quarter notes through chord tones, stepping into the next chord. Jazz, swing and blues.",
       energy: [4, 7],
       suits: "any",
+      articulation: "rhythmic",
     },
     (context, chord, barIndex) => {
       const line = [root(chord), third(chord), fifth(chord), root(chord) + 12];
@@ -110,6 +116,7 @@ export const bass: Pattern[] = [
       description: "Funky sixteenth-note syncopation around the root with octave pops. For funk, R&B and busy grooves.",
       energy: [6, 10],
       suits: "sparse",
+      articulation: "busy",
     },
     (context, chord) => {
       const r = root(chord);
@@ -132,6 +139,7 @@ export const bass: Pattern[] = [
       description: "Eighth-note arpeggio up the chord tones. Melodic and flowing; for pop and electronic music.",
       energy: [4, 8],
       suits: "sparse",
+      articulation: "busy",
     },
     (context, chord) => {
       const tones = [root(chord), third(chord), fifth(chord), root(chord) + 12];

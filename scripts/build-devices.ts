@@ -168,10 +168,11 @@ const sessionPlayer = () => {
   p.connect(midiIn, 0, midiOut, 0);
 
   p.comment("Session Player", [8, 4, 120, 18], { fontsize: 12, fontface: 1 });
-  p.control("live.tab", "SP Instrument", enumParam(["Drums", "Bass", "Keys", "Guitar"], 1), [8, 26, 232, 20], {
+  // "Auto" is last so devices saved before it existed keep their setting.
+  p.control("live.tab", "SP Instrument", enumParam(["Drums", "Bass", "Keys", "Guitar", "Auto"], 4), [8, 26, 232, 20], {
     num_lines_patching: 1,
     num_lines_presentation: 1,
-    annotation: "What this player plays.",
+    annotation: "What this player plays. Auto follows the instrument after the device: a Drum Rack plays drums, a bass sound bass, a guitar sound guitar, anything else keys.",
   });
   onOff(p, "SP Active", [8, 54, 44, 18]);
   p.comment("Lookahead", [64, 54, 58, 18]);

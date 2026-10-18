@@ -1,3 +1,4 @@
+import { DrumRole, Kit, KitRole } from "../instrument";
 import { ChordInfo, ClipNote, clamp } from "../music";
 
 export interface RenderContext {
@@ -14,8 +15,13 @@ export interface RenderContext {
   fill: boolean;
   /** The previous clip ended with a fill, so open with an accent. */
   accent: boolean;
+  /** The note each drum sound plays in the loaded kit. */
+  kit: Kit;
   random: () => number;
 }
+
+/** How a pattern plays, to judge how well it suits the loaded sound. */
+export type Articulation = "sustained" | "rhythmic" | "busy";
 
 export interface Pattern {
   /** Stable id; the decision model answers with it. */
@@ -26,6 +32,12 @@ export interface Pattern {
   energy: [number, number];
   /** How busy the rest of the band should be for this to fit. */
   suits: "sparse" | "busy" | "any";
+  /** Melodic patterns: how the notes are played. */
+  articulation?: Articulation;
+  /** Drum patterns: the kit sounds it plays, named in its description for the loaded kit. */
+  uses?: KitRole[];
+  /** Drum patterns: offered only when the kit has one of these sounds of its own (and two for toms). */
+  requires?: DrumRole[];
   render: (context: RenderContext) => ClipNote[];
 }
 

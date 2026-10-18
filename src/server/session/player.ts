@@ -3,8 +3,9 @@ import { BandAnalysis } from "./analyze";
 import { p90, slowest } from "./clock";
 import { SessionConfig } from "./config";
 import { ChordInfo, ClipNote, clamp, hashString, seededRandom, triad } from "./music";
+import { InstrumentProfile, STANDARD_KIT } from "./instrument";
 import { ClipSlotInfo, LiveOps } from "./ops";
-import { Pattern, patternsFor } from "./patterns";
+import { Option, optionsFor } from "./patterns";
 import { Decision, DecisionProvider, DecisionRequest, decideLocally } from "./providers";
 import { describeState } from "./state";
 
@@ -14,7 +15,8 @@ export interface PlayerSettings {
   trackName: string;
   /** 0xRRGGBB, used for the clips. */
   color: number;
-  instrument: Instrument;
+  /** What it plays; "auto" follows the instrument loaded after the device. */
+  instrument: Instrument | "auto";
   active: boolean;
   /** How many bars ahead a decision may be made. */
   lookahead: number;
@@ -125,16 +127,33 @@ export class Player {
   private misses = 0;
   /** Bumped on start and stop so work from an earlier run is dropped. */
   private run = 0;
+  /** The instrument loaded after the device, as last read from Live. */
+  private profile?: InstrumentProfile;
 
   constructor(public settings: PlayerSettings, private deps: PlayerDeps) {}
 
   update = (settings: PlayerSettings) => {
-    const changed = settings.instrument !== this.settings.instrument || settings.length !== this.settings.length;
+    const role = this.role();
+    const lengthChanged = settings.length !== this.settings.length;
     const deactivated = this.settings.active && !settings.active;
     this.settings = settings;
-    if (changed) this.pending.clear();
+    if (lengthChanged || this.role() !== role) this.pending.clear();
     if (deactivated) void this.stopClips();
     this.deps.onChange();
+  };
+
+  /** A newly read instrument: decisions from now on use its sounds. */
+  setInstrument = (profile: InstrumentProfile | undefined) => {
+    const role = this.role();
+    this.profile = profile;
+    if (this.role() !== role) this.pending.clear();
+    this.deps.onChange();
+  };
+
+  /** What the player plays: its setting, or for Auto what the loaded instrument suggests. */
+  role = (): Instrument => {
+    const { instrument } = this.settings;
+    return instrument === "auto" ? this.profile?.suggestedRole ?? "keys" : instrument;
   };
 
   /** Playback started: listen for `join` bars, then play. */
@@ -192,7 +211,9 @@ export class Player {
     deviceId: this.settings.deviceId,
     trackId: this.settings.trackId,
     trackName: this.settings.trackName,
-    instrument: this.settings.instrument,
+    instrument: this.role(),
+    instrumentSetting: this.settings.instrument,
+    sound: this.profile ? { name: this.profile.name, summary: this.profile.summary, kind: this.profile.kind } : undefined,
     active: this.settings.active,
     lookahead: this.settings.lookahead,
     length: this.settings.length,
@@ -236,11 +257,12 @@ export class Player {
     if (samples.length > 20) samples.shift();
   };
 
-  private patterns = (): Pattern[] => patternsFor(this.settings.instrument, this.deps.config.patterns);
+  private patterns = (): Option[] => optionsFor(this.role(), this.profile, this.deps.config.patterns);
 
   private request = (bar: number, analysis: BandAnalysis): DecisionRequest => {
     const { config, transport } = this.deps;
-    const { instrument, energy } = this.settings;
+    const { energy } = this.settings;
+    const instrument = this.role();
     // What will be playing just before this bar: an earlier decision still
     // waiting to go out, else the clip playing now.
     const before = [...this.pending.values()].filter((entry) => entry.bar < bar && entry.prepared).sort((a, b) => b.bar - a.bar)[0];
@@ -257,6 +279,7 @@ export class Player {
       lastPattern: previous?.pattern,
       lastEnergy: previous?.energy,
       barsSinceFill,
+      sound: this.profile?.summary,
     });
     return {
       instrument,
@@ -361,12 +384,16 @@ export class Player {
     const beatsPerBar = (signatureTransport.signatureNumerator * 4) / signatureTransport.signatureDenominator;
 
     const patterns = this.patterns();
-    const pattern = patterns.find((p) => p.id === decision.pattern) ?? patterns.find((p) => p.id === decideLocally(request).pattern)!;
+    // The options can change between deciding and writing (a new kit, say); fall back to what's on offer now.
+    const pattern =
+      patterns.find((p) => p.id === decision.pattern) ??
+      patterns.find((p) => p.id === decideLocally(request).pattern) ??
+      patterns[0];
     const { chords, next } = this.chordsFor(bar, request.analysis);
     // Fills belong in the last bar of a phrase, leading into the next one.
     const endsPhrase = (bar + length - 1) % config.phraseLength === 0;
     const fill = decision.fill && endsPhrase && bar - this.lastFillBar >= 2;
-    const accent = !!this.playing?.fill && this.settings.instrument === "drums";
+    const accent = !!this.playing?.fill && this.role() === "drums";
     const signature = [pattern.id, decision.energy, chords.map((c) => c.symbol).join(","), fill, accent, length].join("|");
 
     const log: DecisionLog = {
@@ -406,6 +433,7 @@ export class Player {
           energy: decision.energy,
           fill,
           accent,
+          kit: this.profile?.kind === "drums" ? this.profile.kit : STANDARD_KIT,
           random: seededRandom(request.seed),
         }),
         length * beatsPerBar

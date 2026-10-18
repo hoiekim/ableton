@@ -113,7 +113,11 @@ export interface PlayerState {
   deviceId: number;
   trackId: number;
   trackName: string;
+  /** What it plays: its setting, or what Auto made of the loaded instrument. */
   instrument: Instrument;
+  instrumentSetting: Instrument | "auto";
+  /** The instrument loaded after the device, as the server read it from Live. */
+  sound?: { name: string; summary: string; kind: "drums" | "melodic" };
   active: boolean;
   lookahead: number;
   length: number;

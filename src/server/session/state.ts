@@ -9,6 +9,8 @@ export interface PlayerContext {
   lastPattern?: string;
   lastEnergy?: number;
   barsSinceFill: number;
+  /** The loaded instrument, as worked out from Live (see instrument.ts). */
+  sound?: string;
 }
 
 const ROLE_NAMES = { bass: "Bass", chords: "Chords", melody: "Melody", drums: "Drums" } as const;
@@ -97,6 +99,7 @@ export const describeState = (analysis: BandAnalysis, transport: TransportState,
     ? `Your last bar: ${player.lastPattern} at energy ${player.lastEnergy}.`
     : "You haven't played yet.";
   lines.push(`You play ${player.instrument}. ${last} Bars since your last fill: ${player.barsSinceFill}. ${phrase}`);
+  if (player.sound) lines.push(`Your instrument: ${player.sound}.`);
 
   return lines.join("\n");
 };

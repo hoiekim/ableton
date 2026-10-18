@@ -1,12 +1,13 @@
-import { DeviceState, InputState, TrackState, inputRoles, instruments } from "common";
+import { DeviceState, Instrument, InputState, TrackState, inputRoles, instruments } from "common";
 import { LiveStore } from "../store";
 import { BandAnalysis, BarRecord, InputBar, analyzeBand } from "./analyze";
 import { AudioNotes } from "./audio";
 import { ClipAnchor, InputClip, anchorClip, clipNotesInBar } from "./clips";
 import { beatsPerBar, estimateSongTime, msPerBeat } from "./clock";
 import { loadConfig } from "./config";
+import { profileInstrument } from "./instrument";
 import { InputInfo, Recorder, parseOsc } from "./listen";
-import { clamp, noteName } from "./music";
+import { clamp, liveNoteName } from "./music";
 import { LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing } from "./player";
 import { createProvider } from "./providers";
@@ -15,6 +16,8 @@ const TICK_MS = 15;
 const HISTORY_BARS = 32;
 const ANALYSIS_BARS = 16;
 const STATUS_REFRESH_MS = 1000;
+/** Loading a rack changes a track's devices several times in a row; read the instrument once it settles. */
+const INSTRUMENT_SETTLE_MS = 400;
 
 interface InputMeta {
   deviceId: number;
@@ -32,6 +35,15 @@ const param = (device: DeviceState, name: string, fallback: number) => {
   return value === undefined || !Number.isFinite(value) ? fallback : Math.round(value);
 };
 
+/** "SP Instrument" is Drums, Bass, Keys, Guitar or Auto (added last, so older devices keep their setting). */
+const instrumentSetting = (device: DeviceState): Instrument | "auto" => {
+  const setting = device.session?.params["SP Instrument"];
+  if (!setting) return "auto";
+  const index = Math.round(setting.value);
+  if (setting.label === "Auto" || index >= instruments.length) return "auto";
+  return instruments[clamp(index, 0, instruments.length - 1)];
+};
+
 const playerSettings = (track: TrackState, device: DeviceState): PlayerSettings => {
   const energy = clamp(param(device, "SP Energy", 0), 0, 10);
   return {
@@ -39,7 +51,7 @@ const playerSettings = (track: TrackState, device: DeviceState): PlayerSettings 
     trackId: track.id,
     trackName: track.name,
     color: parseInt(track.color.slice(1), 16) || 0,
-    instrument: instruments[clamp(param(device, "SP Instrument", 1), 0, instruments.length - 1)],
+    instrument: instrumentSetting(device),
     active: device.isActive && param(device, "SP Active", 1) >= 1,
     lookahead: clamp(param(device, "SP Lookahead", 1), 1, 4),
     length: [1, 2, 4][clamp(param(device, "SP Length", 0), 0, 2)],
@@ -72,6 +84,10 @@ export class SessionEngine {
   private wasPlaying = false;
   private publishTimer?: ReturnType<typeof setTimeout>;
   private lastPublish = 0;
+  /** The devices after each player's device, to notice when its instrument changes. */
+  private instrumentKeys = new Map<number, string>();
+  private instrumentTimer?: ReturnType<typeof setTimeout>;
+  private staleInstruments = new Set<number>();
 
   constructor(private store: LiveStore, private ops: () => LiveOps | undefined) {}
 
@@ -134,6 +150,12 @@ export class SessionEngine {
         const player = this.players.get(playerDevice.id);
         if (player) player.update(settings);
         else this.addPlayer(settings);
+        const after = track.devices.slice(track.devices.indexOf(playerDevice) + 1);
+        const key = after.map((device) => `${device.id}:${device.name}:${device.isActive}`).join(",");
+        if (this.instrumentKeys.get(playerDevice.id) !== key) {
+          this.instrumentKeys.set(playerDevice.id, key);
+          this.readInstrumentsSoon([playerDevice.id]);
+        }
         // An input on the player's own track would hear the player itself.
         continue;
       }
@@ -150,8 +172,40 @@ export class SessionEngine {
         });
       }
     }
-    for (const id of [...this.players.keys()]) if (!seenPlayers.has(id)) this.players.delete(id);
+    for (const id of [...this.players.keys()]) {
+      if (seenPlayers.has(id)) continue;
+      this.players.delete(id);
+      this.instrumentKeys.delete(id);
+    }
     this.publish();
+  };
+
+  /** Reads the instrument after each of these players' devices, once the devices settle. */
+  private readInstrumentsSoon = (deviceIds: number[]) => {
+    deviceIds.forEach((id) => this.staleInstruments.add(id));
+    clearTimeout(this.instrumentTimer);
+    this.instrumentTimer = setTimeout(this.readInstruments, INSTRUMENT_SETTLE_MS);
+  };
+
+  private readInstruments = async () => {
+    const ops = this.ops();
+    // Not connected yet: try again shortly.
+    if (!ops) return this.readInstrumentsSoon([]);
+    const ids = [...this.staleInstruments];
+    this.staleInstruments.clear();
+    for (const id of ids) {
+      const player = this.players.get(id);
+      if (!player) continue;
+      try {
+        const raw = await ops.instrument(player.settings.trackId, id);
+        const profile = raw && profileInstrument(raw);
+        player.setInstrument(profile);
+        console.info(`[session] ${player.settings.trackName}: ${profile ? profile.summary : "no instrument after the Session Player"}`);
+      } catch (error) {
+        console.error(`[session] Couldn't read ${player.settings.trackName}'s instrument:`, error);
+        this.staleInstruments.add(id);
+      }
+    }
   };
 
   private addPlayer = (settings: PlayerSettings) => {
@@ -247,6 +301,8 @@ export class SessionEngine {
     this.clips.clear();
     this.anchorClips();
     this.players.forEach((player) => player.start());
+    // A sample dropped on a pad or a new preset doesn't change the device list; read again on each Play.
+    this.readInstrumentsSoon([...this.players.keys()]);
     this.publish();
   };
 
@@ -289,7 +345,7 @@ export class SessionEngine {
           return {
             ...input,
             connected: this.recorder.isConnected(input.deviceId),
-            lastNotes: [...new Set(notes.filter((note) => !note.held).map((note) => noteName(note.pitch)))],
+            lastNotes: [...new Set(notes.filter((note) => !note.held).map((note) => liveNoteName(note.pitch)))],
           };
         }),
       });

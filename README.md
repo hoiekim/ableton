@@ -22,7 +22,10 @@ part (drums, bass, keys or guitar), deciding bar by bar and writing each
 decision as a MIDI clip that Live starts on the next bar.
 
 1. Put **Session Player** (`devices/Session Player.amxd`) on a MIDI track,
-   before an instrument, and pick what it plays. Keep the track for the player:
+   before an instrument, and pick what it plays, or leave it on Auto: it reads
+   the instrument (a Drum Rack's pads, a synth's preset and envelope) and plays
+   drums, bass, guitar or keys to match, telling the decision model which
+   sound is on which note. Keep the track for the player:
    it writes into its last 4 clip slots, and launching a scene also launches
    that row's slot.
 2. Put **Session Input** (`devices/Session Input.amxd`) first on each MIDI track

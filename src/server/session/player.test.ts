@@ -75,6 +75,7 @@ class FakeLive implements LiveOps {
   stopTrack = async () => {
     this.stops++;
   };
+  instrument = async () => undefined;
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));

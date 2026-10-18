@@ -31,7 +31,7 @@ const SLOTS_PER_TRACK = 8;
 
 // ---- Live Set ----
 
-type ObjectKind = "song" | "track" | "device" | "parameter" | "clip_slot" | "clip";
+type ObjectKind = "song" | "track" | "device" | "parameter" | "clip_slot" | "clip" | "chain" | "drum_pad" | "sample";
 
 interface LiveObject {
   id: number;
@@ -69,6 +69,7 @@ const BOOL_PROPS = new Set([
   "is_audio_clip",
   "is_quantized",
   "is_enabled",
+  "has_drum_pads",
 ]);
 
 const READ_ONLY_PROPS = new Set([
@@ -97,7 +98,7 @@ const READ_ONLY_PROPS = new Set([
 ]);
 
 /** Children that are a single object rather than a list, so their path has no index. */
-const SINGLE_CHILDREN = new Set(["master_track", "clip"]);
+const SINGLE_CHILDREN = new Set(["master_track", "clip", "sample"]);
 
 const objects = new Map<number, LiveObject>();
 const byPath = new Map<string, LiveObject>();
@@ -212,7 +213,7 @@ const ROLES = ["Auto", "Bass", "Chords", "Melody", "Drums"];
 
 const sessionPlayer = (instrument: number) =>
   device("Max MIDI Effect", "Session Player", true, [
-    { name: "SP Instrument", items: ["Drums", "Bass", "Keys", "Guitar"], value: instrument },
+    { name: "SP Instrument", items: ["Drums", "Bass", "Keys", "Guitar", "Auto"], value: instrument },
     { name: "SP Active", items: ["Off", "On"], value: 1 },
     { name: "SP Lookahead", min: 1, max: 4, value: 1 },
     { name: "SP Length", items: ["1 bar", "2 bars", "4 bars"], value: 0 },
@@ -225,6 +226,42 @@ const sessionInput = (role: string) =>
     { name: "SPI Role", items: ROLES, value: ROLES.indexOf(role) },
     { name: "SPI On", items: ["Off", "On"], value: 1 },
   ]);
+
+/** Simpler with a sample and an amp envelope (times in ms, sustain 0–1), as Live reports them. */
+const simpler = (name: string, file: string, envelope: { attack: number; decay: number; sustain: number; release: number }) => {
+  const obj = device("Simpler", name, true, [
+    { name: "Ve Attack", min: 0.1, max: 20000, value: envelope.attack },
+    { name: "Ve Decay", min: 1, max: 60000, value: envelope.decay },
+    { name: "Ve Sustain", min: 0, max: 1, value: envelope.sustain },
+    { name: "Ve Release", min: 1, max: 60000, value: envelope.release },
+  ]);
+  const sample = create({ file_path: `/Users/me/Samples/${file}`, length: 44100 }, {}, "sample");
+  obj.children.sample = [sample.id];
+  return obj;
+};
+
+/** A Drum Rack with a Simpler on each named pad; `pads` maps note to sound name. */
+const drumRack = (name: string, pads: Record<number, string>) => {
+  const rack = device("Drum Rack", name);
+  rack.props.has_drum_pads = true;
+  const chains: LiveObject[] = [];
+  const padObjects = Array.from({ length: 128 }, (_, note) => {
+    const sound = pads[note];
+    const padChains = sound ? [create({ name: sound, mute: false, solo: false, out_note: 60 }, { devices: [simpler(sound, `${sound}.wav`, { attack: 0.1, decay: 300, sustain: 0, release: 50 })] }, "chain")] : [];
+    chains.push(...padChains);
+    return create({ note, name: sound ?? "", mute: false, solo: false }, { chains: padChains }, "drum_pad");
+  });
+  rack.children.drum_pads = padObjects.map(({ id }) => id);
+  rack.children.chains = chains.map(({ id }) => id);
+  return rack;
+};
+
+/** An Instrument Rack whose chains hold the given instruments. */
+const instrumentRack = (name: string, chains: [string, LiveObject[]][]) => {
+  const rack = device("Instrument Rack", name);
+  rack.children.chains = chains.map(([chainName, devices]) => create({ name: chainName, mute: false, solo: false }, { devices }, "chain").id);
+  return rack;
+};
 
 const sessionInputAudio = (role: string) =>
   device("Max Audio Effect", "Session Input Audio", true, [
@@ -310,8 +347,27 @@ const song = create(
       track("audio", "Riser", 0xd86ce4, [device("Auto Filter"), device("Delay")], { is_grouped: true }),
       track("audio", "Impacts", 0xe5a2f6, [], { is_grouped: true }),
       // Session Players: an AI drummer and guitarist jamming with the band above.
-      track("midi", "AI Drums", 0xc792ff, [sessionPlayer(0), device("Drum Rack")]),
-      track("midi", "AI Guitar", 0x9d6bff, [sessionPlayer(3), device("Electric")]),
+      // Both players on Auto: the server works out drums and guitar from what's loaded.
+      // The kit's pads are off the General MIDI notes on purpose, to catch assumptions.
+      track("midi", "AI Drums", 0xc792ff, [
+        sessionPlayer(4),
+        drumRack("808 Core Kit", {
+          48: "Kick 808",
+          50: "Snare Tight",
+          51: "Clap 909",
+          52: "Tom Lo",
+          54: "Hat Closed",
+          55: "Tom Hi",
+          58: "Hat Open",
+          60: "Shaker",
+          61: "Crash",
+          62: "Conga Hi",
+        }),
+      ]),
+      track("midi", "AI Guitar", 0x9d6bff, [
+        sessionPlayer(4),
+        instrumentRack("Nylon Guitar", [["Nylon Guitar", [simpler("Nylon Guitar", "Nylon Guitar C3.wav", { attack: 1, decay: 900, sustain: 0.05, release: 300 })]]]),
+      ]),
     ],
     return_tracks: [
       track("return", "A-Reverb", 0x10a4ee, [device("Hybrid Reverb")]),

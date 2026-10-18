@@ -45,7 +45,7 @@ its long name, so either one matches.
 
 | Device | Type | Parameters | Sends |
 |---|---|---|---|
-| Session Player | MIDI effect, before the player's instrument | `SP Instrument` (Drums/Bass/Keys/Guitar), `SP Active`, `SP Lookahead` (1–4 bars), `SP Length` (1/2/4-bar clips), `SP Join` (bars to listen first), `SP Energy` (Auto or 1–10) | nothing; the server reads and observes the parameters through the Live API |
+| Session Player | MIDI effect, before the player's instrument | `SP Instrument` (Drums/Bass/Keys/Guitar/Auto; Auto is last so older devices keep their setting), `SP Active`, `SP Lookahead` (1–4 bars), `SP Length` (1/2/4-bar clips), `SP Join` (bars to listen first), `SP Energy` (Auto or 1–10) | nothing; the server reads and observes the parameters through the Live API |
 | Session Input | MIDI effect, first on a source MIDI track | `SPI Role` (Auto/Bass/Chords/Melody/Drums), `SPI On` | every note-on/off |
 | Session Input Audio | audio effect, first on a source audio track | `SPI Role`, `SPI On`, `SPI Threshold` (dB) | `fzero~` readings every 10 ms, and onsets |
 
@@ -76,6 +76,53 @@ its track.
 | `player.ts` | The scheduler: when to decide, writing and firing clips, misses, latency learning. |
 | `config.ts` | Defaults, merged with [session.config.ts](../session.config.ts) and environment variables. |
 | [live.ts](../src/server/live.ts) | Bridge additions: Session device parameters, and clip operations (`clipSlots`, `writeClip`, `fireClip`, `stopTrack`). |
+
+## Instrument detection
+
+The player reads the first instrument after its device on the track, so the
+decision model knows what it is playing.
+
+- **When it's read:**
+  - When the devices after the Session Player change, after they settle for 0.4 s.
+  - Every time playback starts, which catches a sample dropped onto a pad or a swapped preset.
+- **What's read** (`readInstrument` in [live.ts](../src/server/live.ts)). Each
+  property is asked only of the devices that have it, because Live logs an
+  error otherwise.
+  - **Top-level Drum Rack:** its 128 pads (note and name). A pad counts as loaded
+    when it's named after one of the rack's chains.
+  - **Drum Rack inside an Instrument Rack:** its chain names only. Live 11 reports
+    no pads for a nested rack, and has no way to say which note plays a chain.
+  - **Instrument Rack:** its chains (up to 8), and the instruments in them (up to
+    3 racks deep).
+  - **Simpler:** its sample's file name.
+  - **Operator, Analog, Wavetable, Drift, Simpler and Sampler:** their amp-envelope
+    parameters (`Ae`, `AEG1`, `Amp`, `Env 1`, `Ve` …). Names are read first, then
+    values for at most four parameters, because a synth can have hundreds of
+    parameters, all read on Live's main thread.
+- **What's made of it** ([instrument.ts](../src/server/session/instrument.ts)):
+  - **Drum sounds.** Each pad gets a role (kick, snare, clap, rim, closed or open
+    hat, ride, crash, tom, shaker, conga, percussion, effect) from its name, else
+    from its General MIDI note. The patterns then play the kit's own notes. A sound
+    the kit lacks uses a stand-in, such as clap on the snare or ride on the closed
+    hat. With a nested rack, the sounds are named but their notes are assumed from
+    the standard layout, and the text says so.
+  - **Melodic sounds.** Tags come from preset, rack, chain and sample names: bass,
+    pad, pluck, piano, electric piano, organ, bell, mallet, lead, strings, brass,
+    guitar. Then the envelope adds: slow attack, long release, dies away quickly.
+    Its units are guessed (milliseconds for large ranges, otherwise a position in
+    the range), so names always win.
+  - **Auto role.** A Drum Rack or Impulse plays drums, a bass sound bass, a guitar
+    sound guitar, and anything else keys.
+- **How it reaches the decision model:**
+  - The state text ends with "Your instrument: …", e.g. `Drum Rack "808 Core Kit": kick "Kick 808" C1, snare …`. Notes are named the way Live labels them.
+  - **Drum options:** patterns that need sounds the kit doesn't have are dropped,
+    and the percussion and tom grooves are offered only with those sounds. Each
+    option names the pads it plays, e.g. "Plays: kick "Kick 808" C1, clap on
+    "Snare Tight" D1, …".
+  - **Melodic options:** each pattern is tagged sustained, rhythmic or busy, and
+    its description says how well that suits the sound. For example, "Poor fit:
+    fast notes blur on this slow-attack sound". The local rules weigh the same fit.
+- **Plugins and Max instruments:** only their names are used.
 
 ## Per-bar pipeline
 
@@ -179,6 +226,8 @@ its track.
 - Session View only. The player needs its own track: launching a scene also launches the player's slot in that row.
 - Until a progression has been heard once, the next chord is a guess (the last chord held), so bars 2–5 can clash.
 - Audio input hears one note at a time and may make octave errors.
+- A Drum Rack inside an Instrument Rack can't report which note plays which sound in Live 11; the standard layout is assumed.
+- A synth's sound is judged from names and its amp envelope only; a preset with an uninformative name and an unusual envelope may be described vaguely.
 - The bridge (LiveAPI.amxd) logs every call to Max's console, and asking for `value_items` on non-enum parameters logs errors there; both are harmless.
 
 ## Later

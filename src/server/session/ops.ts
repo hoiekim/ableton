@@ -1,3 +1,4 @@
+import { RawInstrument } from "./instrument";
 import { ClipNote } from "./music";
 
 export interface ClipSlotInfo {
@@ -24,4 +25,6 @@ export interface LiveOps {
   /** Launches a clip; it starts on the next bar, since the clips are written with 1-bar launch quantization. */
   fireClip: (clipId: number) => Promise<void>;
   stopTrack: (trackId: number) => Promise<void>;
+  /** What the first instrument after a device on a track is made of, or undefined when there's none. */
+  instrument: (trackId: number, afterDeviceId: number) => Promise<RawInstrument | undefined>;
 }

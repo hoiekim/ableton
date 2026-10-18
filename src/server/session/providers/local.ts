@@ -1,5 +1,5 @@
 import { clamp, seededRandom } from "../music";
-import { Pattern } from "../patterns";
+import { Option } from "../patterns";
 import { Decision, DecisionProvider, DecisionRequest } from "./types";
 
 const BUSY_ONSETS = 14;
@@ -27,13 +27,15 @@ export const decideLocally = (request: DecisionRequest): Decision => {
 
   const position = ((targetBar - 1) % phraseLength) + 1;
   const phraseStart = position === 1;
-  const score = (pattern: Pattern) => {
+  const score = (pattern: Option) => {
     if (pattern.id === "rest") return silent || energy > 2 ? -10 : 0;
     const [low, high] = pattern.energy;
     let total = energy >= low && energy <= high ? 2 : -Math.min(Math.abs(energy - low), Math.abs(energy - high));
     if (pattern.suits === "busy") total += busy ? 1 : sparse ? -1 : 0;
     if (pattern.suits === "sparse") total += sparse ? 1 : busy ? -1 : 0;
     if (pattern.id === previous?.pattern) total += phraseStart && random() < 0.35 ? 0.5 : 2.5;
+    // How well it suits the loaded sound, e.g. no fast arpeggios on a slow pad.
+    total += pattern.fit;
     return total + random() * 0.5;
   };
   const ranked = [...patterns].sort((a, b) => score(b) - score(a));

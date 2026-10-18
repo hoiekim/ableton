@@ -30,6 +30,9 @@ export const pitchClassName = (pc: number) => SHARP_NAMES[((pc % 12) + 12) % 12]
 
 export const noteName = (pitch: number) => Note.fromMidiSharps(pitch);
 
+/** A note named the way Live labels it, where middle C (60) is C3 and Drum Rack kicks sit on C1. */
+export const liveNoteName = (pitch: number) => `${pitchClassName(pitch)}${Math.floor(pitch / 12) - 2}`;
+
 export const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 /** Tonal writes a plain major triad as "CM"; musicians write "C". */

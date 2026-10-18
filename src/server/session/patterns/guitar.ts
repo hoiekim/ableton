@@ -48,6 +48,7 @@ export const guitar: Pattern[] = [
       description: "One big strum on beat 1 left ringing, a lighter strum on beat 3. Open and gentle; for ballads and quiet verses.",
       energy: [1, 4],
       suits: "busy",
+      articulation: "sustained",
     },
     (context, chord) => [
       ...strum(context, chord, 0, context.beatsPerBar / 2, true, 4),
@@ -60,6 +61,7 @@ export const guitar: Pattern[] = [
       description: "Downstrokes on every beat. Steady rhythm guitar for pop and rock.",
       energy: [3, 6],
       suits: "any",
+      articulation: "rhythmic",
     },
     (context, chord) => beats(context).flatMap((t, i) => strum(context, chord, t, context.beatLength * 0.9, true, i ? -4 : 4))
   ),
@@ -69,6 +71,7 @@ export const guitar: Pattern[] = [
       description: "Down-up eighth-note strumming. Busy acoustic feel; for folk, pop and singer-songwriter grooves.",
       energy: [4, 8],
       suits: "sparse",
+      articulation: "busy",
     },
     (context, chord) => grid(context, 0.5).flatMap((t, i) => strum(context, chord, t, 0.45, i % 2 === 0, i % 2 ? -6 : 2))
   ),
@@ -78,6 +81,7 @@ export const guitar: Pattern[] = [
       description: "Palm-muted power chords chugging in eighth notes. Hard rock and punk; heavy and driving.",
       energy: [6, 10],
       suits: "any",
+      articulation: "busy",
     },
     (context, chord) => grid(context, 0.5).flatMap((t, i) => powerChord(chord).map((pitch) => note(pitch, t, 0.3, velocity(context, i % 2 ? -4 : 6))))
   ),
@@ -87,6 +91,7 @@ export const guitar: Pattern[] = [
       description: "Short muted chord chops on syncopated sixteenths. Funk and disco rhythm guitar; tight and percussive.",
       energy: [6, 10],
       suits: "any",
+      articulation: "busy",
     },
     (context, chord) => {
       const hits = [0.5, 1, 1.75, 2.5, 3, 3.75].filter((t) => t < context.beatsPerBar);
@@ -99,6 +104,7 @@ export const guitar: Pattern[] = [
       description: "Fingerpicked eighth notes: bass note then the chord's upper strings in turn. Delicate and flowing; for folk and soft pop.",
       energy: [2, 6],
       suits: "sparse",
+      articulation: "busy",
     },
     (context, chord) => {
       const strings = shape(chord);

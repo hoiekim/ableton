@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { analyzeBand } from "../analyze";
 import { defaultConfig } from "../config";
-import { builtInPatterns } from "../patterns";
+import { builtInPatterns, optionsFor } from "../patterns";
 import { createJevProvider } from "./jev";
 import { DecisionRequest } from "./types";
 
@@ -9,7 +9,7 @@ const request = (overrides: Partial<DecisionRequest> = {}): DecisionRequest => (
   instrument: "bass",
   state: "The next bar is bar 5 of the jam. Tempo 120 BPM, 4/4 time.",
   analysis: analyzeBand([]),
-  patterns: builtInPatterns.bass,
+  patterns: optionsFor("bass", undefined),
   targetBar: 5,
   phraseLength: 4,
   previous: { pattern: "root-fifth", energy: 5 },

@@ -46,6 +46,7 @@ export const keys: Pattern[] = [
       description: "Soft sustained chord held for the whole bar. Warm background harmony; leaves room for everyone else.",
       energy: [1, 4],
       suits: "busy",
+      articulation: "sustained",
     },
     (context, chord) => block(context, chord, 0, context.beatsPerBar * 0.98, -12)
   ),
@@ -55,6 +56,7 @@ export const keys: Pattern[] = [
       description: "Chords on beats 1 and 3 with a low root in the left hand. Classic piano accompaniment for ballads and pop.",
       energy: [3, 6],
       suits: "any",
+      articulation: "sustained",
     },
     (context, chord) => [
       note(leftHand(chord), 0, context.beatsPerBar * 0.95, velocity(context)),
@@ -67,6 +69,7 @@ export const keys: Pattern[] = [
       description: "Chords struck on every beat. Steady and full; for rock and gospel, or when the band needs a pulse.",
       energy: [5, 8],
       suits: "sparse",
+      articulation: "rhythmic",
     },
     (context, chord) => beats(context).flatMap((t, i) => block(context, chord, t, context.beatLength * 0.8, i ? -6 : 4))
   ),
@@ -76,6 +79,7 @@ export const keys: Pattern[] = [
       description: "Short chord stabs on the off-beats (the 'and's). Reggae skank, ska and house piano.",
       energy: [5, 9],
       suits: "any",
+      articulation: "rhythmic",
     },
     (context, chord) => beats(context).flatMap((t) => block(context, chord, t + context.beatLength / 2, 0.2))
   ),
@@ -85,6 +89,7 @@ export const keys: Pattern[] = [
       description: "Jazz comping: syncopated chord hits on 1 and the and-of-2. Conversational; good with walking bass and swing.",
       energy: [3, 7],
       suits: "any",
+      articulation: "rhythmic",
     },
     (context, chord) => [...block(context, chord, 0, 0.9, 2), ...block(context, chord, context.beatLength * 1.5, 0.45, -4)]
   ),
@@ -94,6 +99,7 @@ export const keys: Pattern[] = [
       description: "Rolling eighth-note arpeggio through the chord, up and back down. Flowing and melodic; for pop, film and electronic music.",
       energy: [3, 7],
       suits: "sparse",
+      articulation: "busy",
     },
     (context, chord) => {
       const tones = voicing(chord);
@@ -107,6 +113,7 @@ export const keys: Pattern[] = [
       description: "Alberti-style broken chord in sixteenths (low, high, middle, high). Busy and classical; adds motion.",
       energy: [5, 8],
       suits: "sparse",
+      articulation: "busy",
     },
     (context, chord) => {
       const [low, middle, high] = voicing(chord);

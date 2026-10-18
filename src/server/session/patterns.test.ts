@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { instruments } from "common";
+import { STANDARD_KIT } from "./instrument";
 import { chordFromSymbol, seededRandom } from "./music";
 import { RenderContext, builtInPatterns } from "./patterns";
 
@@ -13,6 +14,7 @@ const context = (overrides: Partial<RenderContext> = {}): RenderContext => ({
   energy: 6,
   fill: false,
   accent: false,
+  kit: STANDARD_KIT,
   random: seededRandom(1),
   ...overrides,
 });

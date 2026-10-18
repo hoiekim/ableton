@@ -1,13 +1,14 @@
 import { Instrument } from "common";
 import { BandAnalysis } from "../analyze";
-import { Pattern } from "../patterns";
+import { Option } from "../patterns";
 
 export interface DecisionRequest {
   instrument: Instrument;
   /** The band summed up as text (see state.ts). */
   state: string;
   analysis: BandAnalysis;
-  patterns: Pattern[];
+  /** The options, described for the loaded instrument. */
+  patterns: Option[];
   targetBar: number;
   phraseLength: number;
   previous?: { pattern: string; energy: number };

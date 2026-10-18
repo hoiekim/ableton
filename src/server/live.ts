@@ -12,6 +12,7 @@ import {
 } from "common";
 import { ClipNoteData, InputClip } from "./session/clips";
 import { estimateSongTime, msPerBeat } from "./session/clock";
+import { RawInstrument, isEnvelopeParam } from "./session/instrument";
 import { ClipSlotInfo, ClipSpec, LiveOps } from "./session/ops";
 import { LiveStore } from "./store";
 
@@ -85,6 +86,12 @@ const watchedClipProps = ["notes", "looping", "loop_start", "loop_end"];
 // Session Player and Session Input devices are recognized by their parameter
 // names ("SP Instrument", "SPI Role", ...), so renaming a device is fine.
 const SESSION_PARAM = /^SPI? /;
+
+const RACKS = new Set(["InstrumentGroupDevice", "DrumGroupDevice"]);
+/** Synths whose amp envelope tells something about the sound. */
+const ENVELOPE_CLASSES = new Set(["Operator", "UltraAnalog", "InstrumentVector", "Drift", "OriginalSimpler", "MultiSampler"]);
+const MAX_RACK_DEPTH = 3;
+const MAX_RACK_CHAINS = 8;
 
 /** Clip launch quantization index for "1 Bar" (Live object model). */
 const LAUNCH_ONE_BAR = 5;
@@ -614,6 +621,92 @@ class LiveSession {
     stopTrack: async (trackId) => {
       await this.live.call(`id ${trackId}`, { method: "stop_all_clips", parameters: [] }, trackId);
     },
+    instrument: async (trackId, afterDeviceId) => {
+      const devices = this.tracks.get(trackId)?.devices.map((device) => device.state) ?? [];
+      const after = devices.slice(devices.findIndex((device) => device.id === afterDeviceId) + 1);
+      const device = after.find((d) => d.type === "instrument" || RACKS.has(d.className));
+      if (!device) return undefined;
+      return this.readInstrument(device.id, device.name, device.className, device.classDisplayName, 0);
+    },
+  };
+
+  /**
+   * Reads what an instrument is made of. Each property is only asked of the
+   * devices that have it: Live logs an error otherwise (has_drum_pads, for
+   * instance, exists only on Drum Racks).
+   */
+  private readInstrument = async (
+    id: number,
+    name: string,
+    className: string,
+    displayName: string,
+    depth: number
+  ): Promise<RawInstrument> => {
+    const raw: RawInstrument = { id, name, className, displayName };
+    const path = `id ${id}`;
+
+    if (className === "DrumGroupDevice") {
+      const chains = (await this.children(path, "chains", ["name"], id)).map((chain) => toText(chain.name, "name"));
+      // Only a top-level Drum Rack has pads; a nested one reports none, and
+      // Live 11 doesn't say which note plays its chains.
+      if (toBoolean(await this.live.get(path, "has_drum_pads", id), "has_drum_pads")) {
+        const pads = (await this.children(path, "drum_pads", ["note", "name"], id)).map((pad) => ({
+          note: toNumber(pad.note, "note"),
+          name: toText(pad.name, "name"),
+        }));
+        // A pad with something on it is named after one of the rack's chains.
+        const loaded = new Set(chains);
+        raw.pads = pads.filter((pad) => pad.name && loaded.has(pad.name));
+        if (!raw.pads.length) raw.pads = pads.filter((pad) => pad.name && !/^[A-G]#?-?\d$/.test(pad.name));
+      } else {
+        raw.drumChains = chains;
+      }
+      return raw;
+    }
+
+    if (className === "InstrumentGroupDevice") {
+      if (depth >= MAX_RACK_DEPTH) return raw;
+      raw.chains = [];
+      const chains = (await this.children(path, "chains", ["name"], id)).slice(0, MAX_RACK_CHAINS);
+      for (const chain of chains) {
+        const chainId = Number(chain.id);
+        const devices = await this.children(`id ${chainId}`, "devices", ["name", "type", "class_name", "class_display_name"], chainId);
+        const instruments: RawInstrument[] = [];
+        for (const device of devices) {
+          const deviceClass = toText(device.class_name, "class_name");
+          if (toDeviceType(device.type) !== "instrument" && !RACKS.has(deviceClass)) continue;
+          const deviceName = toText(device.name, "name");
+          const deviceDisplay = toText(device.class_display_name, "class_display_name");
+          instruments.push(await this.readInstrument(Number(device.id), deviceName, deviceClass, deviceDisplay, depth + 1));
+        }
+        raw.chains.push({ name: toText(chain.name, "name"), instruments });
+      }
+      return raw;
+    }
+
+    if (className === "OriginalSimpler") {
+      const [sample] = await this.children(path, "sample", ["file_path"], id);
+      const file = sample ? toText(sample.file_path, "file_path").split(/[\\/]/).pop() : "";
+      if (file) raw.samples = [file];
+    }
+    if (ENVELOPE_CLASSES.has(className)) {
+      // Names first, then values only for the few envelope parameters: a synth
+      // can have hundreds of parameters, all read on Live's main thread.
+      const params = (await this.children(path, "parameters", ["name"], id))
+        .map((param) => ({ id: Number(param.id), name: toText(param.name, "name") }))
+        .filter((param) => isEnvelopeParam(param.name))
+        .slice(0, 4);
+      raw.envelope = await Promise.all(
+        params.map(async ({ id: paramId, name: paramName }) => {
+          const paramPath = `id ${paramId}`;
+          const [value, min, max] = await Promise.all(
+            ["value", "min", "max"].map(async (prop) => toNumber(await this.live.get(paramPath, prop, paramId), prop))
+          );
+          return { name: paramName, value, min, max };
+        })
+      );
+    }
+    return raw;
   };
 
   private clipIn = async (slotId: number) => {
