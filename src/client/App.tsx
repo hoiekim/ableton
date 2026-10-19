@@ -1,11 +1,28 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
+import { Dashboard } from "./Dashboard";
 import { SessionPanel } from "./SessionPanel";
 import { Connection, Transport } from "./Transport";
 import { TrackRow } from "./TrackRow";
 import { useLiveSocket } from "./useLiveSocket";
 
+type View = "tracks" | "dashboard";
+
+const viewFromHash = (): View => (window.location.hash === "#dashboard" ? "dashboard" : "tracks");
+
+/** Which view is open, kept in the address so it survives a reload. */
+const useView = () => {
+  const [view, setView] = useState(viewFromHash);
+  useEffect(() => {
+    const onChange = () => setView(viewFromHash());
+    window.addEventListener("hashchange", onChange);
+    return () => window.removeEventListener("hashchange", onChange);
+  }, []);
+  return view;
+};
+
 export const App = () => {
   const { isOnline, state, sendCommand, sendDirection, sendListen } = useLiveSocket();
+  const view = useView();
   const { status, transport, tracks } = state;
 
   let connection: Connection;
@@ -34,13 +51,29 @@ export const App = () => {
         disabled={status !== "connected"}
         onCommand={sendCommand}
       />
-      {status === "connected" && <SessionPanel session={state.session} onDirection={sendDirection} />}
-      <main className="tracks">
-        {tracks.map((track) => (
-          <TrackRow key={track.id} track={track} onListen={sendListen} />
-        ))}
-        {notice && <p className="notice">{notice}</p>}
-      </main>
+      {status === "connected" && (
+        <nav className="viewTabs" aria-label="Views">
+          <a href="#" className={view === "tracks" ? "active" : undefined} aria-current={view === "tracks" ? "page" : undefined}>
+            Tracks
+          </a>
+          <a href="#dashboard" className={view === "dashboard" ? "active" : undefined} aria-current={view === "dashboard" ? "page" : undefined}>
+            Dashboard
+          </a>
+        </nav>
+      )}
+      {status === "connected" && view === "dashboard" ? (
+        <Dashboard session={state.session} transport={transport} onDirection={sendDirection} />
+      ) : (
+        <>
+          {status === "connected" && <SessionPanel session={state.session} onDirection={sendDirection} />}
+          <main className="tracks">
+            {tracks.map((track) => (
+              <TrackRow key={track.id} track={track} onListen={sendListen} />
+            ))}
+            {notice && <p className="notice">{notice}</p>}
+          </main>
+        </>
+      )}
     </div>
   );
 };

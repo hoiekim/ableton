@@ -11,7 +11,7 @@ const DEFAULT_BASE_URL = "https://api.typesafe.ai";
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
 interface JevAnswers {
-  pattern: { choice: string; confidence: number };
+  pattern: { choice: string; confidence: number; probabilities?: Record<string, number> };
   energy?: { score: number };
   fill: { noul: number };
   join?: { noul: number };
@@ -81,31 +81,48 @@ export const createJevProvider = (config: SessionConfig["jev"], fetch: Fetch = g
   decide: async (request, { timeoutMs }): Promise<Decision> => {
     const apiKey = process.env.TYPESAFE_API_KEY;
     if (!apiKey) throw new Error("TYPESAFE_API_KEY isn't set");
+    const questions = buildQuestions(request, config);
     const baseUrl = (process.env.TYPESAFE_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
     const response = await fetch(`${baseUrl}/v1/systemone`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: config.model, state: request.state, questions: buildQuestions(request, config) }),
+      body: JSON.stringify({ model: config.model, state: request.state, questions }),
       signal: AbortSignal.timeout(Math.max(timeoutMs, 50)),
     });
     if (!response.ok) {
       const detail = (await response.text()).slice(0, 200);
       throw new Error(`Jev answered ${response.status}${detail ? `: ${detail}` : ""}`);
     }
-    const { answers } = (await response.json()) as { answers: JevAnswers };
+    const received = (await response.json()) as { answers: JevAnswers };
+    const { answers } = received;
     const { choice, confidence } = answers.pattern;
     const energy = request.energyOverride ?? clamp(Math.round((answers.energy?.score ?? 4) + 1), 1, 10);
     const fill = answers.fill.noul >= 0.5;
-    const join = request.joinBar !== undefined && answers.join ? answers.join.noul >= 0.5 : undefined;
+    const asked = request.joinBar !== undefined && answers.join;
+    const join = asked ? answers.join!.noul >= 0.5 : undefined;
+    // What the dashboard shows of the answer, whoever ends up deciding.
+    const seen = {
+      fill,
+      join,
+      odds: Object.entries(answers.pattern.probabilities ?? { [choice]: confidence })
+        .map(([pattern, p]) => ({ pattern, p }))
+        .sort((a, b) => b.p - a.p)
+        .slice(0, 3),
+      fillP: answers.fill.noul,
+      joinP: asked ? answers.join!.noul : undefined,
+    };
+    const local = () => {
+      const decision = decideLocally(request);
+      return { ...decision, ...seen, trace: { questions, received, ranking: decision.trace?.ranking } };
+    };
 
-    if (confidence < config.minConfidence) {
-      return { ...decideLocally(request), fill, join, fallbackReason: `Jev was unsure (${confidence.toFixed(2)})` };
-    }
+    if (confidence < config.minConfidence) return { ...local(), fallbackReason: `Jev was unsure (${confidence.toFixed(2)})` };
+    const trace = { questions, received };
     // "hold" keeps the previous part, re-rendered for the next chord.
-    if (choice === HOLD && request.previous) return { ...request.previous, fill, join, provider: "jev", confidence };
+    if (choice === HOLD && request.previous) return { ...request.previous, ...seen, provider: "jev", confidence, trace };
     if (!request.patterns.some((pattern) => pattern.id === choice)) {
-      return { ...decideLocally(request), fill, join, fallbackReason: `Jev chose an unknown pattern "${choice}"` };
+      return { ...local(), fallbackReason: `Jev chose an unknown pattern "${choice}"` };
     }
-    return { pattern: choice, energy, fill, join, provider: "jev", confidence };
+    return { pattern: choice, energy, ...seen, provider: "jev", confidence, trace };
   },
 });

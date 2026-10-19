@@ -40,6 +40,16 @@ decision as a MIDI clip that Live starts on the next bar.
    the decision model was told, how long it took and how early the clip was in
    place.
 
+The **Dashboard** tab (http://localhost:3005/#dashboard) lines the jam up bar by
+bar: the chords, a little piano roll of what each input played (the bar in
+progress fills in as notes arrive), what was said on the Session Voice tracks,
+and below them each player's decision for each bar, with the notes it wrote,
+how sure the decision model was, how long it took and how early the clip was
+in place. Click a decision to see exactly what was sent (the band as text, the
+patterns on offer, the questions) and what came back (Jev's probabilities for
+every pattern, energy level, fill and coming in early, or the local rules'
+scores). After Stop, the last take stays up until the next Play.
+
 Each track row on the web page has a **Listen** switch: it turns that track's
 Session Input and Session Voice on or off (their On switch in Live), so you
 can take a part out of what the players hear without touching Live. Tracks

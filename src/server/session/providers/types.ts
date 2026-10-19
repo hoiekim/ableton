@@ -1,4 +1,4 @@
-import { Instrument } from "common";
+import { DecisionOdds, Instrument } from "common";
 import { BandAnalysis } from "../analyze";
 import { Option } from "../patterns";
 
@@ -44,6 +44,21 @@ export interface Decision {
   provider: string;
   confidence?: number;
   fallbackReason?: string;
+  /** The decision model's likeliest patterns, and its fill and join probabilities. */
+  odds?: DecisionOdds[];
+  fillP?: number;
+  joinP?: number;
+  /** What was sent and received, for the dashboard. */
+  trace?: DecisionTrace;
+}
+
+export interface DecisionTrace {
+  /** The questions as sent to the decision model. */
+  questions?: unknown;
+  /** Its answer as it came back. */
+  received?: unknown;
+  /** How the local rules scored each pattern. */
+  ranking?: { pattern: string; score: number }[];
 }
 
 export interface DecisionProvider {

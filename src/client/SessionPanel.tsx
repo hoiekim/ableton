@@ -163,7 +163,7 @@ const Heard = ({ session }: { session: SessionState }) => {
 };
 
 /** What the musician wants the players to play; sent when submitted. */
-const DirectionInput = ({ direction, onDirection }: { direction: string; onDirection: (text: string) => void }) => {
+export const DirectionInput = ({ direction, onDirection }: { direction: string; onDirection: (text: string) => void }) => {
   const [text, setText] = useState(direction);
   const [editing, setEditing] = useState(false);
   // Follow the server's value (set from another window, say) unless it's being edited.

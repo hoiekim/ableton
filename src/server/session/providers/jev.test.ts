@@ -56,7 +56,11 @@ describe("Jev provider", () => {
     expect(body.questions.energy.criteria).toHaveLength(10);
     expect(body.questions.fill.type).toBe("noul");
 
-    expect(decision).toEqual({ pattern: "walking", energy: 7, fill: true, provider: "jev", confidence: 0.8 });
+    expect(decision).toMatchObject({ pattern: "walking", energy: 7, fill: true, provider: "jev", confidence: 0.8 });
+    expect(decision.odds).toEqual([{ pattern: "walking", p: 0.8 }]);
+    expect(decision.fillP).toBe(0.7);
+    expect(decision.trace?.questions).toEqual(body.questions);
+    expect((decision.trace?.received as any).answers.pattern.choice).toBe("walking");
   });
 
   test("passes the musician's direction to every question", async () => {

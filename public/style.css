@@ -796,3 +796,516 @@ button {
     grid-column: 2 / -1;
   }
 }
+
+/* Views */
+
+.viewTabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.viewTabs a {
+  padding: 6px 12px 8px;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.viewTabs a:hover {
+  color: var(--text);
+}
+
+.viewTabs a.active {
+  border-bottom-color: var(--session);
+  color: var(--text);
+}
+
+/* Dashboard */
+
+.Dashboard {
+  --lane-label: 11rem;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 24px;
+}
+
+.dashHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.dashHeader .direction {
+  flex: 1;
+  min-width: 260px;
+}
+
+.timelineScroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.timeline {
+  display: grid;
+  gap: 2px;
+  min-width: max-content;
+}
+
+.laneLabel {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--surface-raised);
+  grid-column: 1;
+}
+
+.laneLabel.corner {
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.laneLabel.off {
+  opacity: 0.55;
+}
+
+.laneName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.laneMeta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.laneLabel .statusPill {
+  align-self: flex-start;
+}
+
+.laneSection {
+  grid-column: 1 / -1;
+  padding: 10px 0 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The title stays in view while the bars scroll under it. */
+.laneSection span {
+  position: sticky;
+  left: 10px;
+}
+
+.barHead {
+  position: relative;
+  padding: 6px 8px;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.barHead.now {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.barHead.future {
+  opacity: 0.6;
+}
+
+.barProgress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--play);
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px;
+  background: var(--surface);
+}
+
+.cell.empty {
+  background: color-mix(in srgb, var(--surface) 55%, var(--bg));
+}
+
+.chordCell {
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.chordCell.predicted {
+  color: var(--session);
+  font-weight: 400;
+}
+
+.inputCell {
+  justify-content: center;
+  color: var(--instrument);
+}
+
+.inputCell.now {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--play) 50%, transparent);
+}
+
+.speechCell q {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--session);
+  font-size: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.speechBefore {
+  overflow: hidden;
+  color: var(--session);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decisionCell {
+  border: 0;
+  border-left: 3px solid var(--text-muted);
+  color: var(--session);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.decisionCell:hover {
+  background: var(--surface-raised);
+}
+
+.decisionCell:focus-visible {
+  outline: 2px solid var(--session);
+  outline-offset: -2px;
+}
+
+.decisionCell.fired {
+  border-left-color: var(--play);
+}
+
+.decisionCell.missed {
+  border-left-color: var(--record);
+}
+
+.decisionCell.waited {
+  border-left-color: var(--accent);
+}
+
+.decisionCell.pending {
+  justify-content: center;
+  border: 1px dashed var(--session);
+  background: transparent;
+}
+
+.decisionCell.selected {
+  background: var(--surface-raised);
+  box-shadow: inset 0 0 0 1px var(--session);
+}
+
+.cellTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cellPattern {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decisionCell.missed .cellPattern {
+  color: var(--record);
+}
+
+.decisionCell.waited .cellPattern {
+  color: var(--accent);
+}
+
+.cellMeta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.MiniRoll {
+  display: block;
+  width: 100%;
+  height: 40px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+}
+
+.MiniRoll.large {
+  height: 120px;
+}
+
+.MiniRoll .beatLine {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.MiniRoll .note {
+  fill: currentColor;
+}
+
+.MiniRoll .note.held {
+  fill-opacity: 0.45;
+}
+
+.MiniRoll .unheard {
+  fill: var(--bg);
+  fill-opacity: 0.65;
+}
+
+/* Decision detail */
+
+.DecisionDetail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.detailHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.detailHeader h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.detailClose {
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.detailColumns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.detailColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.detailColumn h4 {
+  margin: 0 0 2px;
+  color: var(--session);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.detailColumn h5 {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.detailMeta {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.detailOutcome {
+  margin: 0;
+}
+
+.detailState,
+.detailRaw {
+  max-height: 260px;
+  margin: 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+}
+
+.detailOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.detailOptions li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.detailOptions li.chosen {
+  background: color-mix(in srgb, var(--session) 18%, transparent);
+}
+
+.optionText {
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fit {
+  flex: none;
+  font-size: 10px;
+}
+
+.fit.good {
+  color: var(--play);
+}
+
+.fit.poor {
+  color: var(--accent);
+}
+
+.detailQuestion {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.detailQuestion p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+.DecisionDetail details summary {
+  margin-top: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.probBars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.probBars li {
+  display: grid;
+  grid-template-columns: minmax(0, 8rem) minmax(0, 1fr) 3rem;
+  align-items: center;
+  gap: 8px;
+}
+
+.probLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.probBars li.chosen .probLabel {
+  color: var(--session);
+  font-weight: 600;
+}
+
+.probTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.probFill {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  background: var(--text-muted);
+}
+
+.probBars li.chosen .probFill {
+  background: var(--session);
+}
+
+.probValue {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  text-align: right;
+}
+
+@media (max-width: 1000px) {
+  .detailColumns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .Dashboard {
+    --lane-label: 7.5rem;
+  }
+}

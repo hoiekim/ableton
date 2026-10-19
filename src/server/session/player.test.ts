@@ -239,7 +239,7 @@ describe("Player", () => {
     await playUntil(5);
     // It would have joined at bar 5; the next bar a decision could still make was 3.
     expect(firedBars(live)[0]).toBe(3);
-    expect(player.state().recent.at(-1)!.state).toContain('Heard on Vocals this bar: "ok let\'s go, give me a cue"');
+    expect(player.detail(3)!.sent.state).toContain('Heard on Vocals this bar: "ok let\'s go, give me a cue"');
   });
 
   test("asked early, the decision model may choose to wait for the Join bar", async () => {
@@ -289,6 +289,34 @@ describe("Player", () => {
     await cued.playUntil(10);
     // One cued fill straight away, then back to the phrase ends.
     expect(fillBars(cued.live)).toEqual([4, 6, 8]);
+  });
+
+  test("keeps what each decision was sent and got back, and the notes it wrote", async () => {
+    const { live, player, playUntil } = setup();
+    let pendingSeen = false;
+    while (live.clock.bar < 4) {
+      live.advance(15 / live.clock.msPerBeat);
+      player.tick();
+      if (player.state().pending.length) pendingSeen = true;
+      await flush();
+    }
+    expect(pendingSeen).toBe(true);
+    const fired = player.state().recent.find((log) => log.bar === 3)!;
+    expect(fired).toMatchObject({ outcome: "fired", length: 1 });
+    expect(fired.notes!.length).toBeGreaterThan(0);
+    fired.notes!.forEach(([pitch, start, duration, velocity]) => {
+      expect(pitch).toBeGreaterThan(0);
+      expect(start + duration).toBeLessThanOrEqual(4);
+      expect(velocity).toBeGreaterThan(0);
+    });
+    const detail = player.detail(3)!;
+    expect(detail.sent.state).toContain("You play bass.");
+    // Only the latest decision carries its state text to the web page.
+    expect(player.state().recent[0].state).toBe(player.detail(player.state().recent[0].bar)!.sent.state);
+    expect(fired.state).toBeUndefined();
+    expect(detail.sent.options.map((option) => option.id)).toContain(fired.pattern);
+    expect(detail.ranking![0].pattern).toBe(fired.pattern);
+    expect(player.detail(99)).toBeUndefined();
   });
 
   test("switching the device off stops its clips", async () => {

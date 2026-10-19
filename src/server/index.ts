@@ -55,6 +55,12 @@ Bun.serve({
       if (server.upgrade(req)) return;
       return new Response("Expected a WebSocket upgrade", { status: 426 });
     }
+    // /api/decisions/<deviceId>/<bar>: what a player sent and got back for that bar.
+    const decision = pathname.match(/^\/api\/decisions\/(\d+)\/(\d+)$/);
+    if (decision) {
+      const detail = session.decisionDetail(Number(decision[1]), Number(decision[2]));
+      return detail ? Response.json(detail) : new Response("No such decision (only the latest are kept)", { status: 404 });
+    }
     return serveClient(pathname);
   },
   websocket,

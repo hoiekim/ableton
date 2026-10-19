@@ -1,3 +1,4 @@
+import { CompactNote } from "common";
 import { Chord, Note } from "tonal";
 
 /** A note to write into a clip. Times are in beats from the clip start. */
@@ -93,4 +94,13 @@ export const hashString = (text: string) => {
   let hash = 2166136261;
   for (let i = 0; i < text.length; i++) hash = Math.imul(hash ^ text.charCodeAt(i), 16777619);
   return hash >>> 0;
+};
+
+const thousandths = (value: number) => Math.round(value * 1000) / 1000;
+
+/** A note as the web page gets it: [pitch, start, duration, velocity, held]. */
+export const compactNote = (pitch: number, start: number, duration: number, velocity: number, held = false): CompactNote => {
+  const note: CompactNote = [pitch, thousandths(start), thousandths(duration), Math.round(velocity)];
+  if (held) note.push(1);
+  return note;
 };

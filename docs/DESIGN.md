@@ -33,7 +33,8 @@ Bun server:  listen -> cut into bars -> analyze (chords, key, loop, rhythm, ener
 Player track:  [Session Player] (settings as Live parameters) -> instrument; Live starts the clip on the bar
 Vocal track:   [Session Voice] records each phrase to /tmp -> OSC "take ready" -> whisper-server (local) -> text
                -> recent phrases join the state text; Jev is also asked whether to come in early
-Web page:      Session panel with each decision, its timing and the text the model saw; Listen switch per track
+Web page:      Session panel with each decision, its timing and the text the model saw; Listen switch per track;
+               Dashboard tab: inputs and decisions bar by bar, each decision's request and answer on click
 ```
 
 ### Devices
@@ -256,6 +257,31 @@ code, and the local rules ignore speech.
   through the bridge (`setSessionParam`), so Live keeps the setting and the
   devices stop sending. The server also ignores takes from a voice that's off.
 
+## Dashboard
+
+The web page's Dashboard tab ([Dashboard.tsx](../src/client/Dashboard.tsx))
+shows the jam as a grid: one column per bar (the last 16, through the bars
+still being decided), one lane per input, the voice, and each player.
+
+- **Inputs:** the session state carries a `timeline` of the last bars: the
+  notes each input played (compact `[pitch, start, duration, velocity, held]`
+  tuples) and the chord heard, ending with the bar in progress. While notes
+  arrive, the engine publishes at most every 200 ms, so that bar fills in live.
+  Stopped, the last take stays until the next Play.
+- **Decisions:** each player's log (last 16) carries what the dashboard draws:
+  pattern, energy, fill, outcome (fired, kept, missed, waited), timing, Jev's
+  top 3 patterns with fill and join probabilities, and the notes written. Bars
+  being decided show as pending. A clip longer than a bar spans its bars.
+- **Detail on request:** what was sent (state text, the options with their
+  descriptions, the questions as sent) and what came back (Jev's whole answer,
+  or the local rules' score for every pattern) is kept per player for the last
+  32 bars. It's served at `GET /api/decisions/<deviceId>/<bar>` when a decision
+  is clicked, rather than sent with every update. For the same reason only the
+  latest decision carries its state text over the socket; a 16-bar session
+  update is about 20 KB.
+- **Takes:** bars count from Play, so a new take clears the players' logs and
+  the timeline; otherwise the last take's bar 3 would show in this one's.
+
 ## Programmability
 
 - **Settings:** [session.config.ts](../session.config.ts) holds the provider
@@ -275,7 +301,7 @@ code, and the local rules ignore speech.
 
 ## Verification
 
-- **Unit tests** (`bun test`, 160 tests):
+- **Unit tests** (`bun test`, 161 tests):
   - chord, key and loop detection
   - every pattern rendering valid notes on the chord
   - OSC decoding and bar cutting
@@ -284,6 +310,7 @@ code, and the local rules ignore speech.
   - Jev request shape against a fake `fetch`, including the speech, cue and join questions
   - transcripts: noise filtering, WAV length while a file is still being written, take messages carrying no paths
   - speech in the scheduler: joining early (or waiting) on what Jev answers, asking again without an answer, one cued fill per phrase
+  - decision details: what was sent, the local ranking, the notes written, and pending bars
 - **End to end against the mock bridge** (`bun run mock`):
   - The mock includes clips, launch-quantized playback, device parameters, and a scripted band on Bass, Keys and Vocals. The Vocals part arrives as pitch readings.
   - At 80, 120 and 160 BPM: no missed bars, clips in place about 150 ms or more before their bar, and the guitar's chords matched the band from bar 6 on.
@@ -298,6 +325,13 @@ code, and the local rules ignore speech.
   - "Take it down, nice and quiet." in bar 6: by bar 8 the drums played `sparse` and the guitar `ballad-strum`, both at energy 3.
   - The Listen switch turned both of Vocals' devices off and on through the bridge; a take while off wasn't recorded.
   - whisper-server stopped with the server.
+- **Dashboard, against the mock with Jev and with local rules:** input lanes
+  filled in live and matched the band's clips; decisions lined up under their
+  bars, including a "not yet" for "Are you ready?" and the cued fill after "Give
+  me a cue". Clicking a decision showed Jev's real answer (pattern, energy, fill
+  and join probabilities, token counts) or the local scores. The page didn't
+  scroll sideways at phone width (the grid scrolls inside its frame), and
+  jam-check still had no wrong or missing bars at 80, 120 and 160 BPM.
 - **Not yet verified in Ableton Live itself**, including the Session Voice
   patch: its level gate, `sfrecord~` file handling and `sprintf` path have only
   been checked for valid connections, not run in Max.

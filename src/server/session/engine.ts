@@ -1,5 +1,15 @@
 import fs from "fs/promises";
-import { DeviceState, Instrument, InputState, MAX_DIRECTION_LENGTH, SpeechState, TrackState, inputRoles, instruments } from "common";
+import {
+  DeviceState,
+  Instrument,
+  InputState,
+  MAX_DIRECTION_LENGTH,
+  SpeechState,
+  TimelineBar,
+  TrackState,
+  inputRoles,
+  instruments,
+} from "common";
 import { LiveStore } from "../store";
 import { BandAnalysis, BarRecord, InputBar, analyzeBand } from "./analyze";
 import { AudioNotes } from "./audio";
@@ -8,7 +18,7 @@ import { beatsPerBar, estimateSongTime, msPerBeat } from "./clock";
 import { loadConfig } from "./config";
 import { profileInstrument } from "./instrument";
 import { InputInfo, Recorder, parseOsc } from "./listen";
-import { clamp, liveNoteName } from "./music";
+import { clamp, compactNote, liveNoteName } from "./music";
 import { LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing } from "./player";
 import { createProvider } from "./providers";
@@ -22,6 +32,10 @@ const STATUS_REFRESH_MS = 1000;
 const INSTRUMENT_SETTLE_MS = 400;
 /** Phrases kept for the players and the web page. */
 const SPEECH_KEPT = 8;
+/** Bars of what the inputs played sent to the web page's timeline. */
+const TIMELINE_BARS = 16;
+/** While notes arrive, the web page is updated this often at most. */
+const NOTE_PUBLISH_MS = 200;
 
 interface InputMeta {
   deviceId: number;
@@ -101,6 +115,7 @@ export class SessionEngine {
   private barStartBeat = 0;
   private wasPlaying = false;
   private publishTimer?: ReturnType<typeof setTimeout>;
+  private notePublishTimer?: ReturnType<typeof setTimeout>;
   private lastPublish = 0;
   /** The devices after each player's device, to notice when its instrument changes. */
   private instrumentKeys = new Map<number, string>();
@@ -149,6 +164,9 @@ export class SessionEngine {
     }
   };
 
+  /** Everything about a player's decision for a bar, for the dashboard. */
+  decisionDetail = (deviceId: number, bar: number) => this.players.get(deviceId)?.detail(bar);
+
   /** Sets the style direction; it's used from the next decision on. */
   setDirection = (text: string) => {
     this.direction = text.trim().slice(0, MAX_DIRECTION_LENGTH);
@@ -170,6 +188,7 @@ export class SessionEngine {
       void this.onVoice(message.deviceId, message.take);
       return;
     }
+    if (this.wasPlaying) this.publishSoon();
     if (message.type === "note") {
       this.recorder.push({ ...message, receivedAt: performance.now() });
       return;
@@ -347,13 +366,38 @@ export class SessionEngine {
     };
   };
 
-  /** Analysis of the recent bars plus what's been heard of the current one. */
-  private analyzeNow = () => {
+  /** The bar in progress, as heard so far. */
+  private currentBar = () => {
     const { transport } = this.store.state;
-    const bpb = beatsPerBar(transport);
     const now = estimateSongTime(transport, this.store.songTimeAt);
-    const partial = this.recorder.peekBar(this.bar, this.barStartBeat, bpb, this.inputInfos(), now);
-    return analyzeBand([...this.history.slice(-ANALYSIS_BARS), partial], this.upcoming);
+    return this.recorder.peekBar(this.bar, this.barStartBeat, beatsPerBar(transport), this.inputInfos(), now);
+  };
+
+  /** Analysis of the recent bars plus what's been heard of the current one. */
+  private analyzeNow = () => analyzeBand([...this.history.slice(-ANALYSIS_BARS), this.currentBar()], this.upcoming);
+
+  /**
+   * What the inputs played in the last bars, with the bar in progress, for the
+   * dashboard. Stopped, it's the last take's bars, until Play starts a new one.
+   */
+  private timeline = (): TimelineBar[] => {
+    const partial = this.bar ? this.currentBar() : undefined;
+    const complete = this.history.slice(-(partial ? TIMELINE_BARS - 1 : TIMELINE_BARS));
+    const records = partial ? [...complete, partial] : complete;
+    if (!records.length) return [];
+    const analysis = partial ? analyzeBand([...this.history.slice(-ANALYSIS_BARS), partial], this.upcoming) : analyzeBand(this.history.slice(-ANALYSIS_BARS));
+    return records.map((record) => ({
+      bar: record.index,
+      beatsPerBar: record === partial ? beatsPerBar(this.store.state.transport) : record.beatsPerBar,
+      ...(record === partial && { partial: true }),
+      chord: analysis.chordAt(record.index).chord?.symbol,
+      heard: Object.fromEntries(
+        record.inputs.map((input) => [
+          input.deviceId,
+          input.notes.map((note) => compactNote(note.pitch, note.start, note.duration, note.velocity, note.held)),
+        ])
+      ),
+    }));
   };
 
   private tick = () => {
@@ -410,6 +454,15 @@ export class SessionEngine {
     this.publish();
   };
 
+  /** Publishes soon, so the bar in progress fills in on the web page as notes arrive. */
+  private publishSoon = () => {
+    if (this.notePublishTimer) return;
+    this.notePublishTimer = setTimeout(() => {
+      this.notePublishTimer = undefined;
+      this.publish();
+    }, NOTE_PUBLISH_MS);
+  };
+
   /** Sends session state to the web app, at most once per event-loop turn. */
   private publish = () => {
     if (this.publishTimer) return;
@@ -437,6 +490,7 @@ export class SessionEngine {
         voices: [...this.voices.values()].map((voice) => ({ ...voice, connected: this.recorder.isConnected(voice.deviceId) })),
         speech: this.speech,
         transcriber: this.transcriber.state,
+        timeline: this.timeline(),
       });
     }, 0);
   };

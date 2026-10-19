@@ -89,9 +89,23 @@ export type PlayerStatus = "off" | "waiting" | "listening" | "playing" | "error"
 /** "waited": asked early because someone spoke, the player chose not to come in yet. */
 export type DecisionOutcome = "fired" | "kept" | "missed" | "waited";
 
+/**
+ * A note, compactly: pitch, start and duration in beats (from the bar's or
+ * clip's start), velocity, and 1 when it was already sounding as the bar began.
+ */
+export type CompactNote = [pitch: number, start: number, duration: number, velocity: number, held?: 1];
+
+/** One of the options the decision model weighed, with its probability. */
+export interface DecisionOdds {
+  pattern: string;
+  p: number;
+}
+
 export interface DecisionLog {
   /** Bar number (1-based, counted from when playback started) the decision is for. */
   bar: number;
+  /** Bars the clip lasts (the device's clip length). */
+  length: number;
   pattern: string;
   energy: number;
   fill: boolean;
@@ -106,8 +120,41 @@ export interface DecisionLog {
   marginMs: number;
   outcome: DecisionOutcome;
   clipName?: string;
-  /** The text the decision model was given. */
-  state: string;
+  /**
+   * The text the decision model was given. Sent with the latest decision only;
+   * the others' are in their detail (DecisionDetail.sent.state).
+   */
+  state?: string;
+  /** The decision model's likeliest patterns, most likely first (Jev only). */
+  odds?: DecisionOdds[];
+  /** Its probability for playing a fill, and for coming in early when asked. */
+  fillP?: number;
+  joinP?: number;
+  /** The notes written into the clip, or the looping clip's when it was kept. */
+  notes?: CompactNote[];
+}
+
+/**
+ * Everything about one decision, served on request (GET
+ * /api/decisions/<deviceId>/<bar>) since it's too big to send every update.
+ */
+export interface DecisionDetail {
+  deviceId: number;
+  trackName: string;
+  instrument: Instrument;
+  log: DecisionLog;
+  sent: {
+    /** The band summed up as text. */
+    state: string;
+    /** The patterns on offer, described for the loaded instrument. */
+    options: { id: string; description: string; fit: number }[];
+    /** The questions as sent to the decision model (Jev); absent for local rules. */
+    questions?: unknown;
+  };
+  /** The decision model's answer as it came back (Jev); absent for local rules. */
+  received?: unknown;
+  /** How the local rules scored each pattern, when they decided or stood in. */
+  ranking?: { pattern: string; score: number }[];
 }
 
 export interface PlayerState {
@@ -128,6 +175,8 @@ export interface PlayerState {
   message?: string;
   provider: string;
   recent: DecisionLog[];
+  /** Bars being decided ("ready" once decided, waiting to be written). */
+  pending: { bar: number; ready: boolean }[];
   stats: { decisions: number; misses: number; p90Ms: number };
 }
 
@@ -141,6 +190,18 @@ export interface InputState {
   connected: boolean;
   /** Notes heard in the last complete bar, e.g. ["A2", "E3"]. */
   lastNotes: string[];
+}
+
+/** One bar of what the inputs played, for the dashboard. */
+export interface TimelineBar {
+  /** Counted from Play, like DecisionLog.bar. */
+  bar: number;
+  beatsPerBar: number;
+  /** The bar in progress, heard up to now. */
+  partial?: boolean;
+  chord?: string;
+  /** Notes heard, by input device id. */
+  heard: Record<number, CompactNote[]>;
 }
 
 /** A Session Voice device: it records what's said or sung on its track for the players. */
@@ -182,6 +243,8 @@ export interface SessionState {
   /** What was said or sung recently, newest first. */
   speech: SpeechState[];
   transcriber: TranscriberState;
+  /** The last bars the inputs played, oldest first, ending with the bar in progress. */
+  timeline: TimelineBar[];
 }
 
 export const initialSessionState: SessionState = {
@@ -193,6 +256,7 @@ export const initialSessionState: SessionState = {
   voices: [],
   speech: [],
   transcriber: { status: "off" },
+  timeline: [],
 };
 
 export type ServerMessage =

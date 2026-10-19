@@ -1,8 +1,8 @@
-import { DecisionLog, Instrument, PlayerState, PlayerStatus, SpeechState, TransportState } from "common";
+import { CompactNote, DecisionDetail, DecisionLog, Instrument, PlayerState, PlayerStatus, SpeechState, TransportState } from "common";
 import { BandAnalysis } from "./analyze";
 import { p90, slowest } from "./clock";
 import { SessionConfig } from "./config";
-import { ChordInfo, ClipNote, clamp, hashString, seededRandom, triad } from "./music";
+import { ChordInfo, ClipNote, clamp, compactNote, hashString, seededRandom, triad } from "./music";
 import { InstrumentProfile, STANDARD_KIT } from "./instrument";
 import { ClipSlotInfo, LiveOps } from "./ops";
 import { Option, optionsFor } from "./patterns";
@@ -77,9 +77,13 @@ interface Playing {
   slotIndex: number;
   /** What was rendered, to tell whether a new decision would sound the same. */
   signature: string;
+  notes: CompactNote[];
 }
 
-const MAX_LOG = 12;
+/** Decisions kept for the web page: enough to fill its timeline. */
+const MAX_LOG = 16;
+/** Decisions whose full detail (request, answer) can be looked up. */
+const MAX_DETAILS = 32;
 /** Firing closer than this to the bar risks Live starting the clip a bar late. */
 const MIN_FIRE_MS = 25;
 /** The engine checks every 15 ms, so a decision can start up to that much later than planned. */
@@ -91,6 +95,9 @@ const HEARD_BARS = 4;
 /** A phrase this recent (4 s at least) may ask for a fill outside a phrase's last bar. */
 const CUE_BARS = 2;
 const MAX_HEARD_LINES = 3;
+
+/** The decision model's odds, for the log. */
+const odds = ({ odds, fillP, joinP }: Decision) => ({ odds, fillP, joinP });
 
 /** When a phrase was heard, for the decision model: "this bar", "2 bars ago". */
 const whenSaid = (said: SpeechState, timing: Timing) => {
@@ -145,6 +152,7 @@ export class Player {
   private joinBar = 2;
   private joined = false;
   private recent: DecisionLog[] = [];
+  private details = new Map<number, DecisionDetail>();
   private decisions = 0;
   private misses = 0;
   /** Bumped on start and stop so work from an earlier run is dropped. */
@@ -193,6 +201,9 @@ export class Player {
     this.lastFillBar = -Infinity;
     this.joinCalledAt = 0;
     this.cueUsedAt = 0;
+    // Bars count again from 1: the last take's decisions would be mistaken for this one's.
+    this.recent = [];
+    this.details.clear();
   };
 
   /** Playback stopped; Live stops the clips itself. */
@@ -249,13 +260,18 @@ export class Player {
     status: this.status,
     message: [this.message, this.lookaheadHint()].filter(Boolean).join(" · ") || undefined,
     provider: this.deps.provider.name,
-    recent: this.recent,
+    // Each state text is long and the page only shows the latest; the rest are in the details.
+    recent: this.recent.map((log, i) => (i === 0 ? log : { ...log, state: undefined })),
+    pending: [...this.pending.values()].map(({ bar, prepared }) => ({ bar, ready: !!prepared })).sort((a, b) => a.bar - b.bar),
     stats: {
       decisions: this.decisions,
       misses: this.misses,
       p90Ms: Math.round(this.decisionEstimate()),
     },
   });
+
+  /** Everything about the decision for a bar, while it's among the latest. */
+  detail = (bar: number) => this.details.get(bar);
 
   /** Says so when the decision model is too slow for the Lookahead setting. */
   private lookaheadHint = () => {
@@ -398,8 +414,9 @@ export class Player {
   private waitToJoin = (bar: number, request: DecisionRequest, decision: Decision, decisionMs: number) => {
     this.pending.delete(bar);
     if (decision.join === false) this.nextBar = Math.max(this.nextBar, request.joinBar!);
-    this.remember({
+    const log: DecisionLog = {
       bar,
+      length: this.settings.length,
       pattern: "–",
       energy: decision.energy,
       fill: false,
@@ -411,7 +428,9 @@ export class Player {
       marginMs: Math.round(msUntilBar(bar, this.deps.timing())),
       outcome: "waited",
       state: request.state,
-    });
+      ...odds(decision),
+    };
+    this.remember(log, request, decision);
   };
 
   /** Writes the earliest pending bar once it's decided and the last clip has started. */
@@ -488,6 +507,7 @@ export class Player {
 
     const log: DecisionLog = {
       bar,
+      length,
       pattern: pattern.id,
       energy: decision.energy,
       fill,
@@ -499,6 +519,7 @@ export class Player {
       marginMs: 0,
       outcome: "kept",
       state: request.state,
+      ...odds(decision),
     };
 
     try {
@@ -507,7 +528,7 @@ export class Player {
       if (playing && playing.signature === signature && (bar - playing.bar) % playing.length === 0) {
         this.joined = true;
         log.marginMs = Math.round(msUntilBar(bar, this.deps.timing()));
-        this.remember(log);
+        this.remember({ ...log, notes: playing.notes }, request, decision);
         return;
       }
 
@@ -542,12 +563,13 @@ export class Player {
       }
       await ops.fireClip(clipId);
       if (run !== this.run) return;
-      this.playing = { bar, length, pattern: pattern.id, energy: decision.energy, fill, slotIndex: slot.index, signature };
+      const written = notes.map((note) => compactNote(note.pitch, note.start, note.duration, note.velocity));
+      this.playing = { bar, length, pattern: pattern.id, energy: decision.energy, fill, slotIndex: slot.index, signature, notes: written };
       this.joined = true;
       if (fill) this.lastFillBar = bar + length - 1;
       if (fill && !endsPhrase) this.cueUsedAt = request.cueAt!;
       this.setStatus("playing");
-      this.remember({ ...log, outcome: "fired", marginMs: Math.round(margin), clipName });
+      this.remember({ ...log, outcome: "fired", marginMs: Math.round(margin), clipName, notes: written }, request, decision);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[session] Couldn't play the clip:", message);
@@ -569,8 +591,9 @@ export class Player {
     const { prepared } = entry;
     if (prepared) this.carry = prepared.decision;
     this.misses++;
-    this.remember({
+    const log: DecisionLog = {
       bar: entry.bar,
+      length: this.settings.length,
       pattern: prepared?.decision.pattern ?? "–",
       energy: prepared?.decision.energy ?? 0,
       fill: prepared?.decision.fill ?? false,
@@ -582,7 +605,9 @@ export class Player {
       marginMs: Math.round(msUntilBar(entry.bar, this.deps.timing())),
       outcome: "missed",
       state: prepared?.request.state ?? "",
-    });
+      ...(prepared && odds(prepared.decision)),
+    };
+    this.remember(log, prepared?.request, prepared?.decision);
   };
 
   private ensureRing = async (ops: LiveOps) => {
@@ -615,8 +640,30 @@ export class Player {
     }
   };
 
-  private remember = (log: DecisionLog) => {
+  /** Logs a decision for the web page, with its request and answer for the detail view. */
+  private remember = (log: DecisionLog, request?: DecisionRequest, decision?: Decision) => {
     this.recent = [log, ...this.recent].slice(0, MAX_LOG);
+    if (request) {
+      const { trace } = decision ?? {};
+      this.details.delete(log.bar);
+      this.details.set(log.bar, {
+        deviceId: this.settings.deviceId,
+        trackName: this.settings.trackName,
+        instrument: request.instrument,
+        log,
+        sent: {
+          state: request.state,
+          options: request.patterns.map(({ id, description, fit }) => ({ id, description, fit })),
+          questions: trace?.questions,
+        },
+        received: trace?.received,
+        ranking: trace?.ranking,
+      });
+      for (const bar of this.details.keys()) {
+        if (this.details.size <= MAX_DETAILS) break;
+        this.details.delete(bar);
+      }
+    }
     this.deps.onChange();
   };
 

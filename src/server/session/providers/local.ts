@@ -43,11 +43,18 @@ export const decideLocally = (request: DecisionRequest): Decision => {
     total += styleAffinity(direction, pattern.id) * 3;
     return total + random() * 0.5;
   };
-  const ranked = [...patterns].sort((a, b) => score(b) - score(a));
+  // Each pattern scored once, so its small random part is the same wherever it's compared.
+  const ranked = patterns.map((pattern) => ({ pattern: pattern.id, score: score(pattern) })).sort((a, b) => b.score - a.score);
 
   const fill = position === phraseLength && request.barsSinceFill >= phraseLength - 1 && energy >= 3 && random() < 0.75;
 
-  return { pattern: ranked[0]?.id ?? "rest", energy, fill, provider: "local" };
+  return {
+    pattern: ranked[0]?.pattern ?? "rest",
+    energy,
+    fill,
+    provider: "local",
+    trace: { ranking: ranked.map(({ pattern, score }) => ({ pattern, score: Math.round(score * 100) / 100 })) },
+  };
 };
 
 export const localProvider: DecisionProvider = {
