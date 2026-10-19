@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { AuditionResult, CompactNote, PatternPreview, PatternReview, PlayerState, SessionState, TransportState } from "common";
+import { fetchJson } from "./api";
 import { MiniRoll, pitchRange } from "./MiniRoll";
 
 /** Energies each pattern is shown at. */
@@ -16,19 +17,13 @@ type Sound = NonNullable<PatternReview["sounds"]>[number];
 
 const query = (params: Record<string, string | number>) => new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
 
-const errorText = async (response: Response) => (await response.text()) || `Error ${response.status}`;
-
 /** A player's patterns at each energy, fetched again when its instrument or the Set's time signature changes. */
 const useReviews = (deviceId: number, fill: boolean, chords: string, version: string) => {
   const [reviews, setReviews] = useState<PatternReview[]>();
   const [error, setError] = useState<string>();
   useEffect(() => {
     let cancelled = false;
-    const load = (energy: number) =>
-      fetch(`/api/patterns/${deviceId}?${query({ energy, fill: fill ? 1 : 0, chords })}`).then(async (response) => {
-        if (!response.ok) throw new Error(await errorText(response));
-        return (await response.json()) as PatternReview;
-      });
+    const load = (energy: number) => fetchJson<PatternReview>(`/api/patterns/${deviceId}?${query({ energy, fill: fill ? 1 : 0, chords })}`);
     Promise.all(ENERGIES.map(load))
       .then((value) => {
         if (cancelled) return;
@@ -178,11 +173,10 @@ const PlayerPatterns = ({ player, fill, chords, signature }: { player: PlayerSta
 
   const onAudition = (pattern: string, energy: number) => {
     setAudition({ busy: true });
-    fetch(`/api/patterns/${player.deviceId}/audition?${query({ pattern, energy, fill: fill ? 1 : 0, chords })}`, { method: "POST" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(await errorText(response));
-        setAudition({ result: (await response.json()) as AuditionResult });
-      })
+    fetchJson<AuditionResult>(`/api/patterns/${player.deviceId}/audition?${query({ pattern, energy, fill: fill ? 1 : 0, chords })}`, {
+      method: "POST",
+    })
+      .then((result) => setAudition({ result }))
       .catch((reason) => setAudition({ error: reason instanceof Error ? reason.message : String(reason) }));
   };
 

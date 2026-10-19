@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { DecisionDetail, DecisionLog } from "common";
+import { fetchJson } from "./api";
 import { MiniRoll, pitchRange } from "./MiniRoll";
 
 /** The parts of Jev's answer shown as charts; anything else is in the raw answer. */
@@ -132,11 +133,7 @@ export const DecisionDetailView = ({ deviceId, trackName, bar, log, pending, bea
     setError(undefined);
     if (!version) return;
     let cancelled = false;
-    fetch(`/api/decisions/${deviceId}/${bar}`)
-      .then(async (response) => {
-        if (!response.ok) throw new Error((await response.text()) || `Error ${response.status}`);
-        return (await response.json()) as DecisionDetail;
-      })
+    fetchJson<DecisionDetail>(`/api/decisions/${deviceId}/${bar}`)
       .then((value) => !cancelled && setDetail(value))
       .catch((reason) => !cancelled && setError(reason instanceof Error ? reason.message : String(reason)));
     return () => {

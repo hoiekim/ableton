@@ -83,6 +83,8 @@ Bun.serve({
         }
       );
     }
+    // An API route this server doesn't have: say so, rather than answering with the page.
+    if (pathname.startsWith("/api/")) return new Response(`No such API route: ${pathname}`, { status: 404 });
     return serveClient(pathname);
   },
   websocket,

@@ -39,6 +39,8 @@ describe("drumRole", () => {
     ["Conga Hi", "conga"],
     ["Rimshot", "rim"],
     ["Cowbell", "cowbell"],
+    // Live's own 808 Core Kit names it in two words, on D2: a tom by General MIDI.
+    ["Cow Bell", "cowbell"],
     ["Vox Chop", "fx"],
   ])("%s is a %s", (name, role) => {
     expect(drumRole(name, -1)).toBe(role as ReturnType<typeof drumRole>);

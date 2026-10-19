@@ -197,7 +197,7 @@ const DRUM_WORDS: [DrumRole, RegExp][] = [
   ["tom", /\btoms?\b|\btm\b/],
   ["shaker", /shak|maraca|cabasa|\begg\b/],
   ["tambourine", /tamb/],
-  ["cowbell", /cowbell|\bcb\b/],
+  ["cowbell", /cow ?bell|\bcb\b/],
   ["conga", /conga|bongo|timbal|djembe|tabla/],
   ["perc", /perc|clave|wood|block|agogo|triangle|guiro|\btick\b|\bclick\b/],
   ["fx", /\bfx\b|noise|sweep|riser|\bzap\b|\bvox\b|vocal|chant|impact/],
