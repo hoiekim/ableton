@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from "react";
 import { Dashboard } from "./Dashboard";
+import { Patterns } from "./Patterns";
 import { SessionPanel } from "./SessionPanel";
 import { Connection, Transport } from "./Transport";
 import { TrackRow } from "./TrackRow";
 import { useLiveSocket } from "./useLiveSocket";
 
-type View = "tracks" | "dashboard";
+type View = "tracks" | "dashboard" | "patterns";
 
-const viewFromHash = (): View => (window.location.hash === "#dashboard" ? "dashboard" : "tracks");
+const viewFromHash = (): View => {
+  if (window.location.hash === "#dashboard") return "dashboard";
+  return window.location.hash === "#patterns" ? "patterns" : "tracks";
+};
 
 /** Which view is open, kept in the address so it survives a reload. */
 const useView = () => {
@@ -59,10 +63,15 @@ export const App = () => {
           <a href="#dashboard" className={view === "dashboard" ? "active" : undefined} aria-current={view === "dashboard" ? "page" : undefined}>
             Dashboard
           </a>
+          <a href="#patterns" className={view === "patterns" ? "active" : undefined} aria-current={view === "patterns" ? "page" : undefined}>
+            Patterns
+          </a>
         </nav>
       )}
       {status === "connected" && view === "dashboard" ? (
         <Dashboard session={state.session} transport={transport} onDirection={sendDirection} />
+      ) : status === "connected" && view === "patterns" ? (
+        <Patterns session={state.session} transport={transport} />
       ) : (
         <>
           {status === "connected" && <SessionPanel session={state.session} onDirection={sendDirection} />}

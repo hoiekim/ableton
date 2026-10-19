@@ -4,6 +4,14 @@ import { Pattern } from "./patterns";
 
 export type ProviderName = "auto" | "local" | "jev";
 
+/** When a player may reuse the decision model's last answer instead of asking again (see reuse.ts). */
+export interface ReuseSettings {
+  /** Mid-phrase bars where nothing has changed since the last call reuse its answer. */
+  midPhrase: boolean;
+  /** Bars of a silent band still asked about; after that the last answer holds until something is played or said. */
+  silentBars: number;
+}
+
 export interface SessionConfig {
   /** "auto" uses Jev when TYPESAFE_API_KEY is set, local rules otherwise. */
   provider: ProviderName;
@@ -13,6 +21,8 @@ export interface SessionConfig {
     minConfidence: number;
     /** Extra instructions prepended to every question. */
     instructions?: string;
+    /** When to reuse the last answer instead of calling; false calls for every decision. */
+    reuse: ReuseSettings | false;
   };
   timing: {
     /** Clip must be written and fired at least this long before the bar starts. */
@@ -44,14 +54,14 @@ export interface SessionConfig {
 }
 
 export type UserSessionConfig = Partial<Omit<SessionConfig, "jev" | "timing" | "voice">> & {
-  jev?: Partial<SessionConfig["jev"]>;
+  jev?: Partial<Omit<SessionConfig["jev"], "reuse">> & { reuse?: Partial<ReuseSettings> | false };
   timing?: Partial<SessionConfig["timing"]>;
   voice?: Partial<SessionConfig["voice"]>;
 };
 
 export const defaultConfig: SessionConfig = {
   provider: "auto",
-  jev: { model: "jev-latest", minConfidence: 0.25 },
+  jev: { model: "jev-latest", minConfidence: 0.25, reuse: { midPhrase: true, silentBars: 2 } },
   timing: { fireMarginMs: 150, initialDecisionMs: 450, initialWriteMs: 60 },
   slots: 4,
   phraseLength: 4,
@@ -66,7 +76,11 @@ export const loadConfig = (overrides: UserSessionConfig = userConfig): SessionCo
     ...defaultConfig,
     ...overrides,
     provider,
-    jev: { ...defaultConfig.jev, ...overrides.jev },
+    jev: {
+      ...defaultConfig.jev,
+      ...overrides.jev,
+      reuse: overrides.jev?.reuse === false ? false : { ...(defaultConfig.jev.reuse as ReuseSettings), ...overrides.jev?.reuse },
+    },
     timing: { ...defaultConfig.timing, ...overrides.timing },
     oscPort: Number(process.env.SESSION_OSC_PORT) || overrides.oscPort || defaultConfig.oscPort,
     voice: {

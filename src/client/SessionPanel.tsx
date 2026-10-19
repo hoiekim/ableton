@@ -27,9 +27,16 @@ const Decision = ({ log }: { log: DecisionLog }) => (
       {log.fill && <span className="tag">fill</span>}
     </div>
     <div className="decisionMeta">
-      Bar {log.bar} · energy {log.energy} · {log.provider}
-      {log.confidence !== undefined && ` ${Math.round(log.confidence * 100)}%`} · decided in {log.decisionMs} ms ·{" "}
-      {outcomeText(log)}
+      Bar {log.bar} · energy {log.energy} ·{" "}
+      {log.reused ? (
+        `reused bar ${log.reused.from}'s answer (${log.reused.reason})`
+      ) : (
+        <>
+          {log.provider}
+          {log.confidence !== undefined && ` ${Math.round(log.confidence * 100)}%`} · decided in {log.decisionMs} ms
+        </>
+      )}{" "}
+      · {outcomeText(log)}
     </div>
     {log.fallbackReason && <div className="fallback">{log.fallbackReason}</div>}
   </div>
@@ -63,6 +70,10 @@ const PlayerCard = ({ player }: { player: PlayerState }) => {
         <div>
           <dt>Decision time</dt>
           <dd>{player.stats.p90Ms} ms</dd>
+        </div>
+        <div>
+          <dt>Calls</dt>
+          <dd>{player.provider === "local" ? "none (local)" : `${player.stats.calls}, ${player.stats.reused} reused`}</dd>
         </div>
         <div>
           <dt>Settings</dt>

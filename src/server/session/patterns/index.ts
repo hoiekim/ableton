@@ -33,7 +33,8 @@ export type Option = Pattern & {
   fit: number;
 };
 
-const KIT_LABELS: Record<KitRole, string> = {
+/** Each kit sound as the descriptions name it. */
+export const KIT_LABELS: Record<KitRole, string> = {
   kick: "kick",
   snare: "snare",
   clap: "clap",

@@ -172,7 +172,19 @@ export const DecisionDetailView = ({ deviceId, trackName, bar, log, pending, bea
       ) : (
         <div className="detailColumns">
           <div className="detailColumn">
-            <h4>{questions ? `Sent to ${log.provider === "jev" ? "Jev" : "the decision model"}` : "Worked out by the local rules"}</h4>
+            <h4>
+              {log.reused
+                ? "Not asked"
+                : questions
+                  ? `Sent to ${log.provider === "jev" ? "Jev" : "the decision model"}`
+                  : "Worked out by the local rules"}
+            </h4>
+            {log.reused && (
+              <p className="detailMeta">
+                No call was made: {log.reused.reason}, so the answer for bar {log.reused.from} was reused. This is what the band looked like
+                at the time.
+              </p>
+            )}
             <h5>The band, as text</h5>
             <pre className="detailState">{detail.sent.state}</pre>
             <h5>{detail.sent.options.length} patterns on offer</h5>
@@ -200,7 +212,13 @@ export const DecisionDetailView = ({ deviceId, trackName, bar, log, pending, bea
           </div>
           <div className="detailColumn">
             <h4>Received</h4>
-            {received?.answers ? <JevAnswer response={received} chosen={log.pattern} /> : <p className="detailMeta">No answer from a decision model.</p>}
+            {received?.answers ? (
+              <JevAnswer response={received} chosen={log.pattern} />
+            ) : (
+              <p className="detailMeta">
+                {log.reused ? `Reused from bar ${log.reused.from}: ${log.pattern}, energy ${log.energy}.` : "No answer from a decision model."}
+              </p>
+            )}
             {detail.ranking && (
               <>
                 <h5>{received?.answers ? "Local rules' scores (they stood in)" : "Local rules' scores"}</h5>

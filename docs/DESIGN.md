@@ -79,6 +79,7 @@ its track.
 | `patterns/` | The pattern library and its renderers. |
 | `providers/` | `local.ts` (rules) and `jev.ts`, behind one `DecisionProvider` interface. |
 | `player.ts` | The scheduler: when to decide, writing and firing clips, misses, latency learning. |
+| `reuse.ts` | When a decision can reuse the decision model's last answer instead of calling: the change fingerprint, the silent-band check and the rule. |
 | `voice.ts` | Speech to text: starts whisper-server, waits for each take's file to be written, transcribes it, filters noise, deletes the file. |
 | `config.ts` | Defaults, merged with [session.config.ts](../session.config.ts) and environment variables. |
 | [live.ts](../src/server/live.ts) | Bridge additions: Session device parameters, and clip operations (`clipSlots`, `writeClip`, `fireClip`, `stopTrack`). |
@@ -197,6 +198,45 @@ decision model knows what it is playing.
   are known, the lead never goes below the configured starting estimate
   (450 ms): one quick first answer says little about the next.
 
+## Reusing answers
+
+Jev is cheap, so the player only skips a call where skipping can't change
+what it plays ([reuse.ts](../src/server/session/reuse.ts)). For each bar, once
+its decision is due:
+
+| Situation | Decision |
+|---|---|
+| First or last bar of a phrase (or a clip reaching one) | Ask: changes and fills happen there. |
+| The band changed since the last call | Ask. |
+| Something said in the last 4 bars, or the Style, tempo, sound or Energy setting changed | Ask. |
+| The previous decision was the local rules standing in (Jev late, failed or unsure) | Ask: only Jev's own answers are reused. |
+| The player hasn't come in yet | Ask (including the "come in now?" question). |
+| A mid-phrase bar with none of the above | Reuse the last call's pattern and energy, played on the new chord, with no fill. |
+| The band silent (nothing played or held in the last bar, nor so far in this one) | Ask for the first 2 decisions, then hold the last answer until a note or a phrase arrives. |
+
+- **"The band changed"** compares a coarse fingerprint with the one at the
+  last call. It covers the key, a confident loop's length, band energy and its
+  trend, each part's density, register and loudness summed up over the last
+  pass of the loop (or the last 2 bars), which parts played in the last bar,
+  and where the next bar's chord comes from (clip, loop, guess). Summing over
+  the loop means a loop whose bars differ reads the same from bar to bar.
+  Anything not covered (the exact chord, note counts) either changes every bar
+  of a loop or is handled by rendering on the new chord.
+- **Timing:** a reused decision takes no time, so it's made as late as the
+  clip can still be written: the measured write time plus 200 ms (fire margin,
+  tick slack, and 30 ms to work out the notes) before its bar, rather than at
+  the decision model's lead. It never falls back to local rules for being late,
+  and it's left out of the decision-time measurements, so the scheduler doesn't
+  think Jev got faster.
+- **Low confidence is reused too:** asking again mid-phrase on nearly the same
+  input tends to flip between patterns from bar to bar, which sounds worse.
+- **Visible:** reused decisions carry `reused: { from, reason }` and show as
+  dashed cells on the Dashboard ("reused bar 9 · no call"); each player counts
+  calls made and decisions reused.
+- **Not done:** asking once for all players together, which would halve calls
+  and let them decide as a pair, but changes the questions and may slow the
+  answer.
+
 ## Style direction
 
 The web panel has a Style box for free text that applies to every player, such
@@ -282,6 +322,26 @@ still being decided), one lane per input, the voice, and each player.
 - **Takes:** bars count from Play, so a new take clears the players' logs and
   the timeline; otherwise the last take's bar 3 would show in this one's.
 
+## Patterns tab
+
+The Patterns tab ([Patterns.tsx](../src/client/Patterns.tsx)) reviews each
+player's pattern library away from a jam.
+`GET /api/patterns/<deviceId>?energy=6&fill=0&chords=Am7,Fmaj7,C,G` returns
+the player's options for its loaded instrument (`optionsFor`, so the same
+descriptions, kit filtering and fit the decision model gets), each rendered
+the way `Player.commit` renders it: one bar per chord, the Set's time
+signature, the loaded kit (the standard one when it isn't a drum kit), no
+accent, and notes kept inside the clip. The random seed comes from the pattern
+and energy only, so a request always gives the same notes and a fill changes
+only the fill. Drum reviews also name the kit's sound on each note and the
+pattern sounds sent there, which shows stand-ins. The page asks for energy 3,
+6 and 9 ([review.ts](../src/server/session/review.ts)).
+
+`POST /api/patterns/<deviceId>/audition?pattern=<id>&…` writes the same notes
+with `writeClip` into the empty slot just above the player's ring (then reuses
+that slot), never into the ring, and doesn't fire it: firing while Live is
+stopped would start the transport.
+
 ## Programmability
 
 - **Settings:** [session.config.ts](../session.config.ts) holds the provider
@@ -295,13 +355,15 @@ still being decided), one lane per input, the voice, and each player.
   `decide(request, { timeoutMs })` method.
 - **Voice:** `voice` in the config sets the whisper-server program, the model,
   its port (9103) and the confidence floor for transcripts.
+- **Reusing answers:** `jev.reuse` sets `midPhrase` and `silentBars`;
+  `reuse: false` calls for every decision.
 - **Environment:** `TYPESAFE_API_KEY` (read from `.env`), `TYPESAFE_BASE_URL`,
   `SESSION_PROVIDER`, `SESSION_OSC_PORT`, `SESSION_WHISPER_PORT`,
   `SESSION_WHISPER_MODEL`.
 
 ## Verification
 
-- **Unit tests** (`bun test`, 161 tests):
+- **Unit tests** (`bun test`, 193 tests):
   - chord, key and loop detection
   - every pattern rendering valid notes on the chord
   - OSC decoding and bar cutting
@@ -311,6 +373,7 @@ still being decided), one lane per input, the voice, and each player.
   - transcripts: noise filtering, WAV length while a file is still being written, take messages carrying no paths
   - speech in the scheduler: joining early (or waiting) on what Jev answers, asking again without an answer, one cued fill per phrase
   - decision details: what was sent, the local ranking, the notes written, and pending bars
+  - reusing answers: the rule for every row of its table, the fingerprint staying put over a loop and changing when a part does, and the scheduler asking at phrase edges, reusing mid-phrase at the last moment, holding through silence and asking again after speech
 - **End to end against the mock bridge** (`bun run mock`):
   - The mock includes clips, launch-quantized playback, device parameters, and a scripted band on Bass, Keys and Vocals. The Vocals part arrives as pitch readings.
   - At 80, 120 and 160 BPM: no missed bars, clips in place about 150 ms or more before their bar, and the guitar's chords matched the band from bar 6 on.
@@ -332,6 +395,16 @@ still being decided), one lane per input, the voice, and each player.
   and join probabilities, token counts) or the local scores. The page didn't
   scroll sideways at phone width (the grid scrolls inside its frame), and
   jam-check still had no wrong or missing bars at 80, 120 and 160 BPM.
+- **Reusing answers, against the mock with Jev** (live band at 120 BPM, silent
+  for 8 bars from bar 13): no missed bars or fallbacks. In the steady section,
+  mid-phrase bars 10–11 reused bar 9's answer, while every phrase edge was
+  asked. Once the band had been silent for a bar, Jev was asked twice (both
+  chose `rest`), and that held for the rest of the silence without calls. The
+  bar after the band came back asked again. Calls: 21 for 27 decisions per
+  player; the band changing twice kept the savings low, as intended.
+  jam-check still had no wrong or missing bars at 80, 120 and 160 BPM. The mock
+  had stamped a stopped band's note-offs with a stale position, so notes looked
+  held for 8 bars; it now uses the current position.
 - **Not yet verified in Ableton Live itself**, including the Session Voice
   patch: its level gate, `sfrecord~` file handling and `sprintf` path have only
   been checked for valid connections, not run in Max.

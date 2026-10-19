@@ -1027,6 +1027,11 @@ button {
   border-left-color: var(--accent);
 }
 
+/* No call was made for it: dashed, like a repeat sign. */
+.decisionCell.reused {
+  border-left-style: dashed;
+}
+
 .decisionCell.pending {
   justify-content: center;
   border: 1px dashed var(--session);
@@ -1307,5 +1312,248 @@ button {
 @media (max-width: 640px) {
   .Dashboard {
     --lane-label: 7.5rem;
+  }
+}
+
+/* Patterns */
+
+.Patterns {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 14px 16px 24px;
+}
+
+.patternsHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.patternsHeader .direction {
+  flex: 0 1 26rem;
+  min-width: 240px;
+}
+
+.patternsHeader .sessionMeta {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.fillSwitch {
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.fillSwitch button {
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.fillSwitch button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--session) 22%, transparent);
+  color: var(--text);
+}
+
+.PatternSet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--session);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.patternSetHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.patternSetHeader h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.auditionNote {
+  margin: 0;
+  color: var(--play);
+  font-size: 13px;
+}
+
+.PatternCard {
+  display: grid;
+  grid-template-columns: minmax(0, 20rem) minmax(0, 1fr);
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.patternInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.patternTitle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.patternTag {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.patternDescription {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.patternRolls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.patternRow {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: var(--session);
+}
+
+.rowHead {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.audition {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.audition:hover:not(:disabled) {
+  border-color: var(--session);
+  color: var(--session);
+}
+
+.audition:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.rollArea {
+  position: relative;
+  min-width: 0;
+  height: 100%;
+}
+
+.rollArea .MiniRoll {
+  height: 100%;
+}
+
+.rollArea.melodic {
+  height: 72px;
+  padding-top: 14px;
+}
+
+.rollBars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  pointer-events: none;
+}
+
+.rollBar {
+  flex: 1;
+  padding: 0 4px;
+  border-left: 1px solid color-mix(in srgb, var(--text-muted) 55%, transparent);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.rollBar:first-child {
+  border-left-color: transparent;
+}
+
+.drumRoll {
+  display: grid;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 6px;
+  min-height: 0;
+}
+
+.laneNames {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.laneNames li {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 13px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .PatternCard {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .patternRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rowHead {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  .drumRoll {
+    grid-template-columns: 4.5rem minmax(0, 1fr);
   }
 }

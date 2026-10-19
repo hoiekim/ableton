@@ -7,6 +7,7 @@ import { InstrumentProfile, STANDARD_KIT } from "./instrument";
 import { ClipSlotInfo, LiveOps } from "./ops";
 import { Option, optionsFor } from "./patterns";
 import { Decision, DecisionProvider, DecisionRequest, decideLocally } from "./providers";
+import { Asked, bandQuiet, fingerprint, reuseReason } from "./reuse";
 import { describeState } from "./state";
 
 export interface PlayerSettings {
@@ -52,6 +53,16 @@ export interface PlayerDeps {
   onChange: () => void;
 }
 
+/** What a player is offered and plays with, to review its patterns away from a jam. */
+export interface PatternSource {
+  settings: PlayerSettings;
+  role: Instrument;
+  profile?: InstrumentProfile;
+  /** Its patterns, described for the loaded instrument as the decision model reads them. */
+  options: Option[];
+  provider: string;
+}
+
 /** A decision waiting to be written and fired. */
 interface Prepared {
   bar: number;
@@ -90,6 +101,8 @@ const MIN_FIRE_MS = 25;
 const TICK_SLACK_MS = 20;
 /** Longest a decision request may take before it's abandoned. */
 const PROVIDER_TIMEOUT_MS = 10000;
+/** Time to work out a reused decision (the band's analysis, the notes) before writing it. */
+const REUSE_SLACK_MS = 30;
 /** Phrases heard this many bars back (8 s at least) are told to the decision model. */
 const HEARD_BARS = 4;
 /** A phrase this recent (4 s at least) may ask for a fill outside a phrase's last bar. */
@@ -110,7 +123,8 @@ export const msUntilBar = (bar: number, timing: Timing) => {
   return ((bar - timing.bar) * timing.beatsPerBar - timing.beatInBar) * timing.msPerBeat;
 };
 
-const fitNotes = (notes: ClipNote[], length: number) => {
+/** The notes that start inside a clip of `length` beats, kept within it and within MIDI's ranges. */
+export const fitNotes = (notes: ClipNote[], length: number) => {
   return notes
     .filter((note) => note.start >= 0 && note.start < length - 1e-4)
     .map((note) => ({
@@ -155,6 +169,16 @@ export class Player {
   private details = new Map<number, DecisionDetail>();
   private decisions = 0;
   private misses = 0;
+  /** Requests made to the decision model, and decisions that reused an earlier answer instead. */
+  private calls = 0;
+  private reusedCount = 0;
+  /** The decision model's last own answer, to reuse while nothing changes (see reuse.ts). */
+  private asked?: Asked;
+  private lastWasFallback = false;
+  /** Decisions asked about since the band went quiet. */
+  private quietAsks = 0;
+  /** Whether the next bar to decide will reuse the last answer, worked out once when its decision is due. */
+  private reusing?: { bar: number; reason?: string };
   /** Bumped on start and stop so work from an earlier run is dropped. */
   private run = 0;
   /** The instrument loaded after the device, as last read from Live. */
@@ -167,7 +191,10 @@ export class Player {
     const lengthChanged = settings.length !== this.settings.length;
     const deactivated = this.settings.active && !settings.active;
     this.settings = settings;
-    if (lengthChanged || this.role() !== role) this.pending.clear();
+    if (lengthChanged || this.role() !== role) {
+      this.pending.clear();
+      this.reusing = undefined;
+    }
     if (deactivated) void this.stopClips();
     this.deps.onChange();
   };
@@ -204,6 +231,10 @@ export class Player {
     // Bars count again from 1: the last take's decisions would be mistaken for this one's.
     this.recent = [];
     this.details.clear();
+    this.asked = undefined;
+    this.lastWasFallback = false;
+    this.quietAsks = 0;
+    this.reusing = undefined;
   };
 
   /** Playback stopped; Live stops the clips itself. */
@@ -237,11 +268,15 @@ export class Player {
     const lead = this.decisionLead() + this.writeEstimate() + this.deps.config.timing.fireMarginMs + TICK_SLACK_MS;
     if (!this.playing) this.joinWhenCalled(timing, lead);
     const earliest = this.settings.lookahead * timing.beatsPerBar * timing.msPerBeat;
+    const lastMoment = this.writeEstimate() + this.deps.config.timing.fireMarginMs + TICK_SLACK_MS + REUSE_SLACK_MS;
     while (this.pending.size < this.settings.lookahead && msUntilBar(this.nextBar, timing) <= Math.min(lead, earliest)) {
       const bar = this.nextBar;
+      if (this.reusing?.bar !== bar) this.reusing = { bar, reason: this.reuseFor(bar, timing) };
+      // Reusing takes no time, so it waits for the last moment, for the most context.
+      if (this.reusing.reason && msUntilBar(bar, timing) > lastMoment) break;
       this.nextBar += this.settings.length;
       this.pending.set(bar, { bar, started: performance.now() });
-      void this.decide(bar);
+      void this.decide(bar, this.reusing.reason);
     }
   };
 
@@ -267,11 +302,22 @@ export class Player {
       decisions: this.decisions,
       misses: this.misses,
       p90Ms: Math.round(this.decisionEstimate()),
+      calls: this.calls,
+      reused: this.reusedCount,
     },
   });
 
   /** Everything about the decision for a bar, while it's among the latest. */
   detail = (bar: number) => this.details.get(bar);
+
+  /** The patterns on offer for the loaded instrument, with what they're rendered for. */
+  patternSource = (): PatternSource => ({
+    settings: this.settings,
+    role: this.role(),
+    profile: this.profile,
+    options: this.patterns(),
+    provider: this.deps.provider.name,
+  });
 
   /** Says so when the decision model is too slow for the Lookahead setting. */
   private lookaheadHint = () => {
@@ -306,6 +352,50 @@ export class Player {
     let bar = timing.bar + 1;
     while (msUntilBar(bar, timing) < lead) bar++;
     if (bar < this.nextBar) this.nextBar = bar;
+  };
+
+  /** What the decision for a bar depends on, to tell whether anything changed since the last call. */
+  private fingerprintFor = (bar: number, analysis: BandAnalysis) => {
+    const { energy } = this.settings;
+    return fingerprint(analysis, this.deps.transport(), {
+      instrument: this.role(),
+      targetBar: bar,
+      direction: this.deps.direction(),
+      sound: this.profile?.summary,
+      energyOverride: energy === "auto" ? undefined : energy,
+    });
+  };
+
+  /** Why the decision for a bar can reuse the last answer instead of calling, if it can. */
+  private reuseFor = (bar: number, timing: Timing) => {
+    if (this.carry || this.deps.provider.name === "local") return undefined;
+    const analysis = this.deps.analyze();
+    return reuseReason({
+      settings: this.deps.config.jev.reuse,
+      asked: this.asked,
+      lastWasFallback: this.lastWasFallback,
+      joined: this.joined,
+      speechFresh: this.heard(timing, HEARD_BARS).length > 0,
+      quiet: bandQuiet(analysis),
+      quietAsks: this.quietAsks,
+      bar,
+      length: this.settings.length,
+      phraseLength: this.deps.config.phraseLength,
+      fingerprint: this.fingerprintFor(bar, analysis),
+    });
+  };
+
+  /** Keeps track of where the decision came from, for reusing it later. */
+  private noteSource = (bar: number, decision: Decision, asked: boolean, analysis: BandAnalysis) => {
+    const quiet = bandQuiet(analysis);
+    if (!quiet) this.quietAsks = 0;
+    else if (asked) this.quietAsks++;
+    if (decision.reused) return;
+    this.lastWasFallback = !!decision.fallbackReason || decision.provider === "local";
+    if (asked && !this.lastWasFallback) {
+      const { pattern, energy, provider, confidence } = decision;
+      this.asked = { bar, pattern, energy, provider, confidence, fingerprint: this.fingerprintFor(bar, analysis) };
+    }
   };
 
   private decisionEstimate = () => p90(this.decisionSamples, this.deps.config.timing.initialDecisionMs);
@@ -374,19 +464,27 @@ export class Player {
     };
   };
 
-  private decide = async (bar: number) => {
+  private decide = async (bar: number, reuse?: string) => {
     const run = this.run;
     const started = performance.now();
     try {
-      const request = this.request(bar, this.deps.analyze());
+      const analysis = this.deps.analyze();
+      const request = this.request(bar, analysis);
       let decision: Decision;
+      let asked = false;
       if (this.carry) {
         decision = { ...this.carry };
         this.carry = undefined;
+      } else if (reuse && this.asked) {
+        const { pattern, energy, provider, confidence } = this.asked;
+        decision = { pattern, energy, fill: false, provider, confidence, reused: { from: this.asked.bar, reason: reuse } };
+        this.reusedCount++;
       } else {
         decision = await this.ask(request, bar);
+        asked = true;
       }
       if (run !== this.run) return;
+      this.noteSource(bar, decision, asked, analysis);
       const entry = this.pending.get(bar);
       // Its bar has already begun; the choice can still serve a later bar.
       if (!entry) {
@@ -457,6 +555,7 @@ export class Player {
     }
     // The request may run past the deadline: its answer is then ignored, but
     // its real duration teaches the scheduler to start the next one earlier.
+    this.calls++;
     const answer = provider.decide(request, { timeoutMs: Math.max(budget, PROVIDER_TIMEOUT_MS) });
     const measure = () => this.sample(this.decisionSamples, performance.now() - started);
     void answer.then(measure, measure);
@@ -520,6 +619,7 @@ export class Player {
       outcome: "kept",
       state: request.state,
       ...odds(decision),
+      reused: decision.reused,
     };
 
     try {

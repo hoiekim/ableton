@@ -50,6 +50,19 @@ patterns on offer, the questions) and what came back (Jev's probabilities for
 every pattern, energy level, fill and coming in early, or the local rules'
 scores). After Stop, the last take stays up until the next Play.
 
+The **Patterns** tab (http://localhost:3005/#patterns) shows what each player
+chooses from, without waiting for a pattern to come up in a jam: every pattern
+on offer for the instrument loaded after it (a kit only gets the drum patterns
+it has the sounds for, your own from `session.config.ts` included), with its
+description exactly as the decision model reads it, the energy range the local
+rules use it at and how well it suits the sound. Each one is drawn as a piano
+roll at energy 3, 6 and 9, with or without a fill, over Am7 Fmaj7 C G or chords
+you type; drum notes are labeled with the kit's own sound names, so a stand-in
+(a rim click played on the snare, say) shows. **Audition in Live** writes that
+pattern into a free clip slot on the player's track (the one just above the
+slots it cycles through, reused for the next audition) without launching it:
+launch it yourself, with the player off, or it takes over once it joins.
+
 Each track row on the web page has a **Listen** switch: it turns that track's
 Session Input and Session Voice on or off (their On switch in Live), so you
 can take a part out of what the players hear without touching Live. Tracks
@@ -72,6 +85,15 @@ By default fast local rules decide; with `TYPESAFE_API_KEY` set (for example
 in a `.env` file in the project folder, which Bun reads at startup), TypeSafe's
 [Jev](https://docs.typesafe.ai) does, falling back to the rules when it's unsure
 or too slow. If Jev takes longer than a bar, raise the device's Lookahead.
+
+Jev is asked about every bar where its answer could matter: the first and last
+bar of each phrase, any bar after the band changes what it's doing, and any bar
+after something is said or the Style changes. In the middle of a steady phrase,
+and after the band has been silent for 2 bars, the player reuses Jev's last
+answer instead of calling again, with no decision time to wait for. About half
+the calls are saved in a steady groove, and none in a jam that keeps changing.
+The Dashboard marks reused bars and counts calls per player; `jev.reuse` in
+[session.config.ts](session.config.ts) tunes it, and `reuse: false` asks every bar.
 
 To steer the style, type it in the Session panel's **Style** box, for example
 "funky 70s soul, laid back" or "driving punk rock". Jev reads it with every

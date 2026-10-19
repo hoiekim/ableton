@@ -20,7 +20,7 @@ export interface PlayerContext {
 
 const ROLE_NAMES = { bass: "Bass", chords: "Chords", melody: "Melody", drums: "Drums" } as const;
 
-const density = (onsets: number) => {
+export const density = (onsets: number) => {
   if (onsets === 0) return "silent";
   if (onsets <= 3) return "sparse";
   if (onsets <= 8) return "moderate";
@@ -28,9 +28,9 @@ const density = (onsets: number) => {
   return "very busy";
 };
 
-const register = (pitch: number) => (pitch < 48 ? "low" : pitch < 65 ? "middle" : "high");
+export const register = (pitch: number) => (pitch < 48 ? "low" : pitch < 65 ? "middle" : "high");
 
-const loudness = (velocity: number) => (velocity < 50 ? "soft" : velocity < 85 ? "medium" : "loud");
+export const loudness = (velocity: number) => (velocity < 50 ? "soft" : velocity < 85 ? "medium" : "loud");
 
 /** Names the rhythm from a 16-step onset grid, since the model reads words better than grids. */
 const rhythm = (grid: string) => {

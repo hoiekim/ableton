@@ -1,4 +1,4 @@
-import { DecisionOdds, Instrument } from "common";
+import { DecisionOdds, Instrument, ReusedFrom } from "common";
 import { BandAnalysis } from "../analyze";
 import { Option } from "../patterns";
 
@@ -50,6 +50,8 @@ export interface Decision {
   joinP?: number;
   /** What was sent and received, for the dashboard. */
   trace?: DecisionTrace;
+  /** Set when an earlier answer was reused instead of asking. */
+  reused?: ReusedFrom;
 }
 
 export interface DecisionTrace {

@@ -22,6 +22,7 @@ import { clamp, compactNote, liveNoteName } from "./music";
 import { LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing } from "./player";
 import { createProvider } from "./providers";
+import { AuditionError, ReviewRequest, auditionPattern, reviewPatterns } from "./review";
 import { Transcriber, voiceFile } from "./voice";
 
 const TICK_MS = 15;
@@ -123,6 +124,8 @@ export class SessionEngine {
   private staleInstruments = new Set<number>();
   /** The musician's style direction, from the web page. */
   private direction = "";
+  /** The clip slot each player's last audition went into, to reuse it. */
+  private auditionSlots = new Map<number, number>();
 
   constructor(private store: LiveStore, private ops: () => LiveOps | undefined) {
     this.transcriber = new Transcriber(this.config.voice, () => this.publish());
@@ -166,6 +169,26 @@ export class SessionEngine {
 
   /** Everything about a player's decision for a bar, for the dashboard. */
   decisionDetail = (deviceId: number, bar: number) => this.players.get(deviceId)?.detail(bar);
+
+  /** A player's patterns for its loaded instrument, rendered for the Patterns tab. */
+  patternReview = (deviceId: number, request: ReviewRequest) => {
+    const player = this.players.get(deviceId);
+    return player && reviewPatterns(player.patternSource(), this.store.state.transport, request);
+  };
+
+  /** Writes one of a player's patterns into a clip slot on its track, for the musician to launch in Live. */
+  auditionPattern = async (deviceId: number, patternId: string, request: ReviewRequest) => {
+    const player = this.players.get(deviceId);
+    if (!player) throw new AuditionError("No such Session Player", 404);
+    const ops = this.ops();
+    if (!ops) throw new AuditionError("Not connected to Live", 503);
+    const { transport } = this.store.state;
+    const previous = this.auditionSlots.get(deviceId);
+    const { slotId, ...result } = await auditionPattern(player.patternSource(), ops, transport, request, patternId, this.config.slots, previous);
+    this.auditionSlots.set(deviceId, slotId);
+    console.info(`[session] ${result.trackName}: "${result.clipName}" written into slot ${result.slot + 1} to audition`);
+    return result;
+  };
 
   /** Sets the style direction; it's used from the next decision on. */
   setDirection = (text: string) => {
@@ -275,6 +298,7 @@ export class SessionEngine {
       if (seenPlayers.has(id)) continue;
       this.players.delete(id);
       this.instrumentKeys.delete(id);
+      this.auditionSlots.delete(id);
     }
     if (this.voices.size) void this.transcriber.ensureStarted();
     this.publish();

@@ -132,6 +132,15 @@ export interface DecisionLog {
   joinP?: number;
   /** The notes written into the clip, or the looping clip's when it was kept. */
   notes?: CompactNote[];
+  /** Set when no call was made: the decision model's answer for an earlier bar was reused, and why. */
+  reused?: ReusedFrom;
+}
+
+export interface ReusedFrom {
+  /** The bar whose answer was reused. */
+  from: number;
+  /** "mid-phrase, nothing changed" or "the band is silent". */
+  reason: string;
 }
 
 /**
@@ -177,7 +186,58 @@ export interface PlayerState {
   recent: DecisionLog[];
   /** Bars being decided ("ready" once decided, waiting to be written). */
   pending: { bar: number; ready: boolean }[];
-  stats: { decisions: number; misses: number; p90Ms: number };
+  /** `calls`: requests made to the decision model; `reused`: decisions that reused an earlier answer instead. */
+  stats: { decisions: number; misses: number; p90Ms: number; calls: number; reused: number };
+}
+
+/** A pattern as the Patterns tab shows it: what the decision model reads about it, and what it plays. */
+export interface PatternPreview {
+  id: string;
+  /** Exactly what the decision model reads, described for the loaded instrument. */
+  description: string;
+  /** Energy range (1–10) the local rules use it for. */
+  energy: [number, number];
+  /** How busy the rest of the band should be for it to fit. */
+  suits: "sparse" | "busy" | "any";
+  /** Melodic patterns: how the notes are played. */
+  articulation?: "sustained" | "rhythmic" | "busy";
+  /** How well it suits the loaded sound: positive suits, negative doesn't. */
+  fit: number;
+  /** The notes the player would write for it over the progression. */
+  notes: CompactNote[];
+}
+
+/**
+ * A Session Player's patterns for its current instrument, rendered at one
+ * energy over a sample progression (GET /api/patterns/<deviceId>).
+ */
+export interface PatternReview {
+  deviceId: number;
+  trackName: string;
+  instrument: Instrument;
+  sound?: PlayerState["sound"];
+  provider: string;
+  /** One bar per chord. */
+  chords: string[];
+  beatsPerBar: number;
+  energy: number;
+  fill: boolean;
+  /**
+   * Drums: what plays on each note the patterns use, lowest first: the kit's
+   * sound, the note as Live names it, and the pattern sounds sent there.
+   */
+  sounds?: { pitch: number; name: string; note: string; roles: string[] }[];
+  patterns: PatternPreview[];
+  /** What the decision model reads about keeping the last clip, when it's offered that too. */
+  hold?: string;
+}
+
+/** A pattern written into a clip slot to try in Live (POST /api/patterns/<deviceId>/audition). */
+export interface AuditionResult {
+  trackName: string;
+  /** 0-based, like Live's scene index. */
+  slot: number;
+  clipName: string;
 }
 
 export interface InputState {

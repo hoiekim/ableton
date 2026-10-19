@@ -59,10 +59,15 @@ const DecisionCell = ({
   return (
     <button
       type="button"
-      className={["cell", "decisionCell", log.outcome, selected ? "selected" : ""].filter(Boolean).join(" ")}
+      className={["cell", "decisionCell", log.outcome, log.reused ? "reused" : "", selected ? "selected" : ""].filter(Boolean).join(" ")}
       style={{ gridRow: row, gridColumn: `${column} / span ${span}` }}
       onClick={onSelect}
-      title={log.fallbackReason ?? `Bar ${log.bar}: ${log.pattern}, energy ${log.energy}. Click for what was sent and received.`}
+      title={
+        log.fallbackReason ??
+        (log.reused
+          ? `Bar ${log.bar}: no call. Reused the answer for bar ${log.reused.from} (${log.reused.reason}).`
+          : `Bar ${log.bar}: ${log.pattern}, energy ${log.energy}. Click for what was sent and received.`)
+      }
     >
       <span className="cellTop">
         <b className="cellPattern">{name}</b>
@@ -70,13 +75,19 @@ const DecisionCell = ({
       </span>
       <span className="cellMeta">
         {log.outcome !== "waited" && `e${log.energy} · `}
-        {log.provider}
-        {log.confidence !== undefined && ` ${percent(log.confidence)}`}
-        {log.fallbackReason && log.outcome !== "missed" && " · fallback"}
+        {log.reused ? (
+          `reused bar ${log.reused.from}`
+        ) : (
+          <>
+            {log.provider}
+            {log.confidence !== undefined && ` ${percent(log.confidence)}`}
+            {log.fallbackReason && log.outcome !== "missed" && " · fallback"}
+          </>
+        )}
       </span>
       {notes.length > 0 && <MiniRoll notes={notes} beats={log.length * beatsPerBar} low={low} high={high} />}
       <span className="cellMeta">
-        {log.decisionMs} ms · {outcomeWord(log)}
+        {log.reused ? "no call" : `${log.decisionMs} ms`} · {outcomeWord(log)}
       </span>
     </button>
   );
@@ -150,6 +161,11 @@ const PlayerLane = ({
         <span className="laneMeta">
           {capitalize(player.instrument)} · {player.provider} · {player.stats.p90Ms} ms
           {player.stats.misses > 0 && ` · ${player.stats.misses} missed`}
+        </span>
+        <span className="laneMeta">
+          {player.provider === "local"
+            ? "local rules: no calls"
+            : `${player.stats.calls} call${player.stats.calls === 1 ? "" : "s"} · ${player.stats.reused} reused`}
         </span>
         <span className={`statusPill ${player.status}`}>{player.status}</span>
       </div>

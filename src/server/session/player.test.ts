@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Note } from "tonal";
 import { SpeechState, initialTransport } from "common";
 import { BarRecord, UpcomingNotes, analyzeBand } from "./analyze";
-import { defaultConfig } from "./config";
+import { SessionConfig, defaultConfig } from "./config";
 import { ClipSlotInfo, ClipSpec, LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing, msUntilBar } from "./player";
 import { DecisionProvider, decideLocally, localProvider } from "./providers";
@@ -99,6 +99,9 @@ const setup = (
     clips?: boolean;
     settings?: Partial<PlayerSettings>;
     speech?: SpeechState[];
+    /** Bars in which the band plays nothing. */
+    silent?: (bar: number) => boolean;
+    config?: SessionConfig;
   } = {}
 ) => {
   const live = new FakeLive();
@@ -106,16 +109,17 @@ const setup = (
   const chords = options.chords ?? ((bar: number) => LOOP[(bar - 1) % 4]);
   // With clips, the band's Keys clip says what every bar will play.
   const upcoming: UpcomingNotes | undefined = options.clips ? (bar) => bandBar(bar, chords(bar)).inputs : undefined;
+  const heard = (bar: number, partial = false): BarRecord =>
+    options.silent?.(bar)
+      ? { index: bar, beatsPerBar: 4, partial, inputs: [{ deviceId: 2, trackName: "Keys", role: "chords", notes: [] }] }
+      : bandBar(bar, chords(bar), partial);
   const player = new Player({ ...settings, ...options.settings }, {
-    config: defaultConfig,
+    config: options.config ?? defaultConfig,
     provider: options.provider ?? localProvider,
     ops: () => live,
     // Finished bars plus the one in progress, as the engine provides.
     analyze: () =>
-      analyzeBand([
-        ...Array.from({ length: live.clock.bar - 1 }, (_, i) => bandBar(i + 1, chords(i + 1))),
-        bandBar(live.clock.bar, chords(live.clock.bar), true),
-      ], upcoming),
+      analyzeBand([...Array.from({ length: live.clock.bar - 1 }, (_, i) => heard(i + 1)), heard(live.clock.bar, true)], upcoming),
     transport: () => ({ ...initialTransport, isPlaying: live.clock.playing }),
     timing: () => live.clock,
     direction: () => "",
@@ -137,6 +141,26 @@ const setup = (
 };
 
 const firedBars = (live: FakeLive) => live.fires.map((fire) => fire.target);
+
+/** A decision model that answers at once with the local choice, and notes each bar it's asked about. */
+const countingModel = () => {
+  const asked: number[] = [];
+  const provider: DecisionProvider = {
+    name: "model",
+    decide: async (request) => {
+      asked.push(request.targetBar);
+      return { ...decideLocally(request), ...(request.joinBar !== undefined && { join: true }), provider: "model" };
+    },
+  };
+  return { asked, provider };
+};
+
+const reusedBars = (player: Player) =>
+  player
+    .state()
+    .recent.filter((log) => log.reused)
+    .map((log) => log.bar)
+    .sort((a, b) => a - b);
 const fillBars = (live: FakeLive) => live.writes.filter((write) => write.spec.name.endsWith(" fill")).map((write) => Number(write.spec.name.split(" ")[1]));
 
 describe("Player", () => {
@@ -317,6 +341,72 @@ describe("Player", () => {
     expect(detail.sent.options.map((option) => option.id)).toContain(fired.pattern);
     expect(detail.ranking![0].pattern).toBe(fired.pattern);
     expect(player.detail(99)).toBeUndefined();
+  });
+
+  describe("reusing the decision model's answer", () => {
+    test("a steady band: phrase edges are always asked, unchanged mid-phrase bars reuse the last answer", async () => {
+      const model = countingModel();
+      const { live, player, playUntil } = setup({ provider: model.provider });
+      await playUntil(17);
+      // Every bar is played, none missed, but not every one cost a call.
+      expect(firedBars(live).length + player.state().recent.filter((log) => log.outcome === "kept").length).toBeGreaterThanOrEqual(15);
+      expect(player.state().stats.misses).toBe(0);
+      for (const edge of [4, 5, 8, 9, 12, 13, 16]) expect(model.asked).toContain(edge);
+      expect(reusedBars(player)).toEqual(expect.arrayContaining([10, 11, 14, 15]));
+      expect(player.state().stats).toMatchObject({ calls: model.asked.length, reused: reusedBars(player).length });
+      // A reused answer is the last call's, and says so.
+      const reused = player.state().recent.find((log) => log.bar === 11)!;
+      expect(reused.reused).toEqual({ from: 9, reason: "mid-phrase, nothing changed" });
+      expect(reused.fill).toBe(false);
+    });
+
+    test("a reused decision waits for the last moment, for the most context", async () => {
+      const model = countingModel();
+      const { live, player, playUntil } = setup({ provider: model.provider });
+      await playUntil(13);
+      const written = (bar: number) => live.writes.find((write) => write.spec.name.startsWith(`SP ${bar} `))!;
+      expect(reusedBars(player)).toContain(10);
+      // Asked bars allow for the decision model's time (450 ms until it has been timed);
+      // a reused one is decided in the last ~250 ms before its bar (500 ms a beat here).
+      expect(written(4).beat).toBeLessThan(3);
+      expect(written(10).beat).toBeGreaterThan(3.45);
+    });
+
+    test("a band gone silent is asked about twice, then the answer holds until it plays again", async () => {
+      const model = countingModel();
+      const { player, playUntil } = setup({ provider: model.provider, silent: (bar) => bar >= 6 && bar <= 12 });
+      await playUntil(16);
+      // Bars 8 and 9 are decided once bars 6 and 7 were silent; then it holds.
+      expect(model.asked).toEqual(expect.arrayContaining([8, 9]));
+      for (const held of [10, 11, 12, 13]) expect(model.asked).not.toContain(held);
+      expect(player.state().recent.find((log) => log.bar === 12)!.reused?.reason).toBe("the band is silent");
+      // Notes in bar 13: the next decision asks again.
+      expect(model.asked).toContain(14);
+    });
+
+    test("something said in the last bars is always asked about", async () => {
+      const model = countingModel();
+      const { playUntil, say } = setup({ provider: model.provider });
+      await playUntil(9);
+      say("take it down");
+      await playUntil(13);
+      expect(model.asked).toEqual(expect.arrayContaining([10, 11, 12]));
+    });
+
+    test("turned off, every decision is asked", async () => {
+      const model = countingModel();
+      const { player, playUntil } = setup({ provider: model.provider, config: { ...defaultConfig, jev: { ...defaultConfig.jev, reuse: false } } });
+      await playUntil(13);
+      expect(reusedBars(player)).toEqual([]);
+      expect(model.asked).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    });
+
+    test("local rules are never reused: they cost nothing", async () => {
+      const { player, playUntil } = setup();
+      await playUntil(13);
+      expect(reusedBars(player)).toEqual([]);
+      expect(player.state().stats.calls).toBe(0);
+    });
   });
 
   test("switching the device off stops its clips", async () => {

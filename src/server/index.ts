@@ -3,6 +3,7 @@ import { stat } from "fs/promises";
 import { SOCKET_PATH } from "common";
 import { LiveBridge } from "./live";
 import { SessionEngine } from "./session/engine";
+import { AuditionError, parseReviewRequest } from "./session/review";
 import { createSocketHandler } from "./socket";
 import { LiveStore } from "./store";
 
@@ -50,7 +51,7 @@ const websocket = createSocketHandler(store, {
 Bun.serve({
   port: Number(process.env.PORT) || 3005,
   fetch: (req, server) => {
-    const { pathname } = new URL(req.url);
+    const { pathname, searchParams } = new URL(req.url);
     if (pathname === SOCKET_PATH) {
       if (server.upgrade(req)) return;
       return new Response("Expected a WebSocket upgrade", { status: 426 });
@@ -60,6 +61,27 @@ Bun.serve({
     if (decision) {
       const detail = session.decisionDetail(Number(decision[1]), Number(decision[2]));
       return detail ? Response.json(detail) : new Response("No such decision (only the latest are kept)", { status: 404 });
+    }
+    // /api/patterns/<deviceId>?energy=6&fill=0&chords=Am7,Fmaj7,C,G: a player's patterns, rendered.
+    // POST /api/patterns/<deviceId>/audition?pattern=<id>&…: one of them written into a clip slot.
+    const patterns = pathname.match(/^\/api\/patterns\/(\d+)(\/audition)?$/);
+    if (patterns) {
+      const request = parseReviewRequest(searchParams);
+      if (typeof request === "string") return new Response(request, { status: 400 });
+      const deviceId = Number(patterns[1]);
+      if (!patterns[2]) {
+        const review = session.patternReview(deviceId, request);
+        return review ? Response.json(review) : new Response("No such Session Player", { status: 404 });
+      }
+      if (req.method !== "POST") return new Response("Audition with POST", { status: 405 });
+      return session.auditionPattern(deviceId, searchParams.get("pattern") ?? "", request).then(
+        (result) => Response.json(result),
+        (error) => {
+          const status = error instanceof AuditionError ? error.status : 500;
+          if (status === 500) console.error("[session] Audition failed:", error);
+          return new Response(error instanceof Error ? error.message : String(error), { status });
+        }
+      );
     }
     return serveClient(pathname);
   },

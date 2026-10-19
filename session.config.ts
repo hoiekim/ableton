@@ -15,6 +15,12 @@ const config: UserSessionConfig = {
   jev: {
     model: "jev-latest",
     minConfidence: 0.25,
+    // When a player may reuse Jev's last answer instead of calling again
+    // (docs/DESIGN.md, "Reusing answers"). false calls for every decision.
+    reuse: {
+      midPhrase: true, // mid-phrase bars where nothing changed since the last call
+      silentBars: 2, // bars of a silent band still asked about before the answer holds
+    },
   },
   timing: {
     fireMarginMs: 150,

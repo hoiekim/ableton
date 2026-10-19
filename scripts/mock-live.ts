@@ -1179,7 +1179,8 @@ const cutInputNotes = (trackId: number, at: number) => {
 };
 
 const allNotesOff = () => {
-  const time = Number(song.props.current_song_time);
+  // The position now, not the last one reported, which can be behind the notes just sent.
+  const time = song.props.is_playing ? songTimeNow() : Number(song.props.current_song_time);
   sounding.forEach((event) => sendNote({ ...event, velocity: 0, beat: time }));
   sounding.clear();
   audioPitch.clear();
