@@ -1,5 +1,8 @@
 import { DecisionOdds, Instrument, ReusedFrom } from "common";
 import { BandAnalysis } from "../analyze";
+import { BarContext, Candidate, Variant } from "../candidates";
+import { ClipNote } from "../music";
+import type { PlanRequest } from "../plan";
 import { Option } from "../patterns";
 
 export interface DecisionRequest {
@@ -23,6 +26,10 @@ export interface DecisionRequest {
   cueAt?: number;
   /** Set when the player hasn't come in yet and would at this bar: should it start now instead? */
   joinBar?: number;
+  /** Concrete bars to choose from (see candidates.ts); without them, the named patterns. */
+  candidates?: Candidate[];
+  /** What the candidates were rendered for, to render a recipe again (reused or carried). */
+  bar?: BarContext;
   /** Varies the local rules' small random choices from bar to bar, reproducibly. */
   seed: number;
 }
@@ -35,7 +42,12 @@ export interface HeardSpeech {
 }
 
 export interface Decision {
+  /** The pattern played, or for a concrete bar the pattern it was made from. */
   pattern: string;
+  /** For a concrete bar: the variation of the pattern, and the notes it plays. */
+  variant?: Variant;
+  notes?: ClipNote[];
+  candidateId?: string;
   /** 1–10. */
   energy: number;
   fill: boolean;
@@ -66,4 +78,6 @@ export interface DecisionTrace {
 export interface DecisionProvider {
   name: string;
   decide: (request: DecisionRequest, options: { timeoutMs: number }) => Promise<Decision>;
+  /** The band plan's answers (see plan.ts); providers without one plan nothing. */
+  plan?: (request: PlanRequest, options: { timeoutMs: number }) => Promise<{ answers: Record<string, { choice?: string; score?: number }>; trace: DecisionTrace }>;
 }

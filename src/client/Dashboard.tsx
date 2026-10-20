@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { DecisionLog, PlayerState, SessionState, TimelineBar, TransportState } from "common";
+import { DecisionLog, PlanState, PlayerState, SessionState, TimelineBar, TransportState } from "common";
 import { DecisionDetailView } from "./DecisionDetail";
+import { PlanDetailView, endingName, sectionName } from "./PlanDetail";
 import { MiniRoll, pitchRange } from "./MiniRoll";
 import { DirectionInput } from "./SessionPanel";
 
@@ -55,7 +56,8 @@ const DecisionCell = ({
 }) => {
   const notes = log.notes ?? [];
   const [low, high] = pitchRange(notes);
-  const name = log.outcome === "waited" ? "not yet" : log.outcome === "missed" ? `missed: ${log.pattern}` : log.pattern;
+  const played = log.variant ? `${log.pattern} · ${log.variant}` : log.pattern;
+  const name = log.outcome === "waited" ? "not yet" : log.outcome === "missed" ? `missed: ${played}` : played;
   return (
     <button
       type="button"
@@ -174,6 +176,62 @@ const PlayerLane = ({
   );
 };
 
+/** The band plan's lane: a block per phrase, with how it ends; click one for what the arranger was asked and answered. */
+const PlanLane = ({
+  plan,
+  row,
+  columns,
+  selected,
+  onSelect,
+}: {
+  plan: PlanState;
+  row: number;
+  columns: number[];
+  selected?: number;
+  onSelect: (decidedAt: number) => void;
+}) => {
+  const byBar = new Map(plan.bars.map((entry) => [entry.bar, entry]));
+  const cells: React.ReactNode[] = [];
+  for (let i = 0; i < columns.length; ) {
+    const entry = byBar.get(columns[i]);
+    if (!entry) {
+      cells.push(<div key={columns[i]} className="cell empty" style={{ gridRow: row, gridColumn: i + 2 }} />);
+      i++;
+      continue;
+    }
+    // One block per phrase, as far as it's on screen.
+    let span = 1;
+    while (i + span < columns.length && byBar.get(columns[i + span])?.start === entry.start && byBar.get(columns[i + span])?.section === entry.section) span++;
+    const last = byBar.get(columns[i + span - 1]);
+    cells.push(
+      <button
+        key={columns[i]}
+        type="button"
+        className={`cell planCell planSection ${entry.section}${selected === entry.decidedAt ? " selected" : ""}`}
+        style={{ gridRow: row, gridColumn: `${i + 2} / span ${span}` }}
+        onClick={() => onSelect(entry.decidedAt)}
+        title={`Planned in bar ${entry.decidedAt}. Click for what the arranger was asked and answered.`}
+      >
+        <b>{sectionName(entry.section)}</b>
+        <span className="cellMeta">
+          {entry.start === columns[i] ? `from bar ${entry.start}` : "…"}
+          {last?.ending && last.ending !== "none" && ` · ${endingName(last.ending)}`}
+        </span>
+      </button>
+    );
+    i += span;
+  }
+  return (
+    <>
+      <div className="laneLabel" style={{ gridRow: row }}>
+        <span className="laneName">Band plan</span>
+        <span className="laneMeta">{plan.problem ?? `intensity ${plan.intensity} · ${plan.calls} plan${plan.calls === 1 ? "" : "s"}`}</span>
+      </div>
+      {cells}
+    </>
+  );
+};
+
 /**
  * The jam bar by bar: what each input played (the bar in progress filling in
  * as notes arrive), what was said, and what each player decided for each bar.
@@ -191,6 +249,7 @@ export const Dashboard = ({
 }) => {
   const { timeline, inputs, players, voices, speech } = session;
   const [selected, setSelected] = useState<Selection>();
+  const [selectedPlan, setSelectedPlan] = useState<number>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const beatsPerBar = (transport.signatureNumerator * 4) / transport.signatureDenominator;
   const beatInBar = transport.isPlaying ? transport.songTime - Math.floor(transport.songTime / beatsPerBar + 1e-9) * beatsPerBar : 0;
@@ -330,6 +389,18 @@ export const Dashboard = ({
               </>
             )}
 
+            {session.plan && (
+              <PlanLane
+                plan={session.plan}
+                row={nextRow()}
+                columns={columns}
+                selected={selectedPlan}
+                onSelect={(decidedAt) => {
+                  setSelected(undefined);
+                  setSelectedPlan(selectedPlan === decidedAt ? undefined : decidedAt);
+                }}
+              />
+            )}
             <div className="laneSection" style={{ gridRow: nextRow() }}>
               <span>What the players decided, and the notes they wrote</span>
             </div>
@@ -341,12 +412,16 @@ export const Dashboard = ({
                 columns={columns}
                 beatsPerBar={beatsPerBar}
                 selected={selected}
-                onSelect={(selection) => setSelected(selected?.deviceId === selection.deviceId && selected.bar === selection.bar ? undefined : selection)}
+                onSelect={(selection) => {
+                  setSelectedPlan(undefined);
+                  setSelected(selected?.deviceId === selection.deviceId && selected.bar === selection.bar ? undefined : selection);
+                }}
               />
             ))}
           </div>
         </div>
       )}
+      {selectedPlan !== undefined && <PlanDetailView decidedAt={selectedPlan} onClose={() => setSelectedPlan(undefined)} />}
       {selected && selectedPlayer && (
         <DecisionDetailView
           deviceId={selected.deviceId}

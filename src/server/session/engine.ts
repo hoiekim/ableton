@@ -4,6 +4,8 @@ import {
   Instrument,
   InputState,
   MAX_DIRECTION_LENGTH,
+  PlanDetail,
+  PlannedBar,
   SessionState,
   SpeechState,
   TimelineBar,
@@ -23,6 +25,7 @@ import { profileInstrument } from "./instrument";
 import { InputInfo, OscMessage, Recorder, parseOsc } from "./listen";
 import { clamp, compactNote, liveNoteName } from "./music";
 import { LiveOps } from "./ops";
+import { BandPlan, PlanRequest, describeBand, phraseStart, planFromAnswers } from "./plan";
 import { Player, PlayerSettings, Timing } from "./player";
 import { createProvider } from "./providers";
 import { AuditionError, ReviewRequest, auditionPattern, reviewPatterns } from "./review";
@@ -134,6 +137,19 @@ export class SessionEngine {
   private notice?: SessionState["notice"];
   /** Tracks an input is being added to, so a double click adds one. */
   private adding = new Set<number>();
+  /** The band plan (see plan.ts), and what it said for each bar as that bar came. */
+  private plan?: BandPlan;
+  private plannedBars = new Map<number, PlannedBar>();
+  private planDetails = new Map<number, PlanDetail>();
+  /** A plan is being made; `planAgain` is where the next one starts, if asked for meanwhile. */
+  private planning = false;
+  private planAgain?: number;
+  private planCalls = 0;
+  private planProblem?: string;
+  /** Bumped on Play and Stop, so a plan from an earlier take is dropped. */
+  private planRun = 0;
+  /** What the last plan was made with, to notice when to plan again before its time. */
+  private plannedWith?: { speechAt: number; direction: string; parts: string; energy: number };
   /** The clip slot each player's last audition went into, to reuse it. */
   private auditionSlots = new Map<number, number>();
 
@@ -181,6 +197,9 @@ export class SessionEngine {
 
   /** Everything about a player's decision for a bar, for the dashboard. */
   decisionDetail = (deviceId: number, bar: number) => this.players.get(deviceId)?.detail(bar);
+
+  /** Everything about the band plan made in a bar. */
+  planDetail = (decidedAt: number) => this.planDetails.get(decidedAt);
 
   /** A player's patterns for its loaded instrument, rendered for the Patterns tab. */
   patternReview = (deviceId: number, request: ReviewRequest) => {
@@ -238,6 +257,7 @@ export class SessionEngine {
   setDirection = (text: string) => {
     this.direction = text.trim().slice(0, MAX_DIRECTION_LENGTH);
     console.info(this.direction ? `[session] Direction: "${this.direction}"` : "[session] Direction cleared");
+    this.planSoon();
     this.publish();
   };
 
@@ -337,6 +357,7 @@ export class SessionEngine {
       if (!text) return;
       console.info(`[voice] ${voice.trackName}${bar ? ` (bar ${bar})` : ""}: "${text}"`);
       this.speech = [{ text, trackName: voice.trackName, bar, at: heardAt }, ...this.speech].slice(0, SPEECH_KEPT);
+      this.planSoon();
       this.publish();
     } catch (error) {
       console.error(`[voice] Couldn't transcribe ${voice.trackName}:`, error);
@@ -447,6 +468,7 @@ export class SessionEngine {
       timing: this.timing,
       direction: () => this.direction,
       speech: () => this.speech,
+      plan: () => this.plan,
       onChange: this.publish,
     });
     if (this.wasPlaying) player.start();
@@ -559,7 +581,14 @@ export class SessionEngine {
     // Bars count from Play: anything said so far came before this take.
     this.speech = this.speech.map((said) => ({ ...said, bar: 0 }));
     this.anchorClips();
+    this.planRun++;
+    this.plan = undefined;
+    this.plannedWith = undefined;
+    this.planning = false;
+    this.planAgain = undefined;
+    this.plannedBars.clear();
     this.players.forEach((player) => player.start());
+    this.requestPlan(1);
     // A sample dropped on a pad or a new preset doesn't change the device list; read again on each Play.
     this.readInstrumentsSoon([...this.players.keys()]);
     this.publish();
@@ -573,6 +602,10 @@ export class SessionEngine {
     this.bar++;
     this.songBar = songBar;
     this.barStartBeat = songBar * bpb;
+    // Each phrase is planned again as the one before it reaches its last bar,
+    // or straight away when the band changes sharply.
+    if (this.bar % this.config.phraseLength === 0) this.requestPlan(this.bar + 1);
+    else if (this.plannedWith && this.bandChanged(this.analysis)) this.requestPlan(this.bar + 1);
     this.publish();
   };
 
@@ -580,8 +613,103 @@ export class SessionEngine {
     this.wasPlaying = false;
     this.bar = 0;
     this.clips.clear();
+    this.planRun++;
+    this.planning = false;
     this.players.forEach((player) => player.stop());
     this.publish();
+  };
+
+  /** The parts playing over the last 2 bars, so one bar's rest doesn't count as stopping. */
+  private bandParts = (analysis?: BandAnalysis) => {
+    const recent = analysis?.bars.filter((bar) => !bar.partial).slice(-2) ?? [];
+    return JSON.stringify([...new Set(recent.flatMap((bar) => bar.parts.map((part) => part.deviceId)))].sort((a, b) => a - b));
+  };
+
+  /** A sharp change in the band, worth planning again for before the phrase ends: a part starting or stopping, or energy moving by 3. */
+  private bandChanged = (analysis?: BandAnalysis) =>
+    !!this.plannedWith &&
+    (this.bandParts(analysis) !== this.plannedWith.parts || Math.abs((analysis?.energy ?? 0) - this.plannedWith.energy) >= 3);
+
+  /** Plans again from the next bar, after something was said or the Style changed. */
+  private planSoon = () => {
+    if (this.wasPlaying) this.requestPlan(this.bar + 1);
+  };
+
+  /** Plans the phrases from the one holding bar `from` on; one plan at a time, the latest request next. */
+  private requestPlan = (from: number) => {
+    if (!this.config.plan || !this.provider.plan || !this.players.size || !this.wasPlaying) return;
+    if (this.planning) {
+      this.planAgain = from;
+      return;
+    }
+    void this.makePlan(from);
+  };
+
+  private makePlan = async (from: number) => {
+    const { phraseLength } = this.config;
+    const count = this.config.plan ? this.config.plan.phrases : 4;
+    const first = phraseStart(from, phraseLength);
+    const starts = Array.from({ length: count }, (_, i) => first + i * phraseLength);
+    const { transport } = this.store.state;
+    const analysis = this.analyzeNow();
+    const barMs = beatsPerBar(transport) * msPerBeat(transport);
+    const now = Date.now();
+    const speech = this.speech
+      .filter((said) => now - said.at <= Math.max(4 * barMs, 8000))
+      .slice(0, 3)
+      .reverse()
+      .map((said) => {
+        const ago = this.bar - said.bar;
+        const when = !said.bar ? "just before playback started" : ago <= 0 ? "this bar" : ago === 1 ? "last bar" : `${ago} bars ago`;
+        return { text: said.text, trackName: said.trackName, when };
+      });
+    const players = [...this.players.values()].map((player) => `${player.settings.trackName} plays ${player.role()}`);
+    const state = describeBand(analysis, transport, { bar: this.bar, players, direction: this.direction, speech, current: this.plan, phraseLength });
+    const request: PlanRequest = { state, starts, phraseLength, current: this.plan, direction: this.direction, speech };
+    const run = this.planRun;
+    const bar = this.bar;
+    this.planning = true;
+    this.plannedWith = { speechAt: this.speech[0]?.at ?? 0, direction: this.direction, parts: this.bandParts(analysis), energy: analysis.energy };
+    const started = performance.now();
+    try {
+      // A plan may take most of a bar: the current one stands until it comes.
+      const { answers, trace } = await this.provider.plan!(request, { timeoutMs: Math.max(2 * barMs, 3000) });
+      if (run !== this.planRun) return;
+      const plan = planFromAnswers(answers, request, bar, this.provider.name);
+      this.plan = plan;
+      this.planCalls++;
+      this.planProblem = undefined;
+      this.recordPlan(plan);
+      this.planDetails.set(bar, { decidedAt: bar, phrases: plan.phrases, intensity: plan.intensity, sent: { state, questions: trace.questions }, received: trace.received, ms: Math.round(performance.now() - started) });
+      for (const old of this.planDetails.keys()) if (old < bar - 64) this.planDetails.delete(old);
+      console.info(`[session] Plan from bar ${first}: ${plan.phrases.map((p) => `${p.section}${p.ending === "none" ? "" : ` (${p.ending})`}`).join(", ")}; intensity ${plan.intensity}`);
+    } catch (error) {
+      if (run !== this.planRun) return;
+      this.planProblem = `Couldn't plan: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(`[session] ${this.planProblem}`);
+    } finally {
+      if (run === this.planRun) {
+        this.planning = false;
+        const next = this.planAgain;
+        this.planAgain = undefined;
+        if (next !== undefined) this.requestPlan(next);
+      }
+      this.publish();
+    }
+  };
+
+  /** Notes what the plan says for the bars still to come; bars already under way keep what they had. */
+  private recordPlan = (plan: BandPlan) => {
+    const { phraseLength } = this.config;
+    for (const phrase of plan.phrases) {
+      for (let i = 0; i < phraseLength; i++) {
+        const bar = phrase.start + i;
+        if (bar <= this.bar) continue;
+        const last = i === phraseLength - 1;
+        this.plannedBars.set(bar, { bar, section: phrase.section, start: phrase.start, ending: last ? phrase.ending : undefined, decidedAt: plan.decidedAt });
+      }
+    }
+    for (const bar of this.plannedBars.keys()) if (bar < this.bar - 32) this.plannedBars.delete(bar);
   };
 
   /** Publishes soon, so the bar in progress fills in on the web page as notes arrive. */
@@ -622,6 +750,18 @@ export class SessionEngine {
         transcriber: this.transcriber.state,
         timeline: this.timeline(),
         notice: this.notice,
+        plan:
+          this.plan || this.planProblem
+            ? {
+                decidedAt: this.plan?.decidedAt ?? 0,
+                intensity: this.plan?.intensity ?? 0,
+                provider: this.plan?.provider ?? this.provider.name,
+                phrases: this.plan?.phrases ?? [],
+                bars: [...this.plannedBars.values()].filter((b) => b.bar >= this.bar - 16).sort((a, b) => a.bar - b.bar),
+                calls: this.planCalls,
+                problem: this.planProblem,
+              }
+            : undefined,
       });
     }, 0);
   };

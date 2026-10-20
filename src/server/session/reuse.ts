@@ -7,6 +7,7 @@
  */
 import { Instrument, TransportState } from "common";
 import { BandAnalysis, PartFeatures } from "./analyze";
+import { Variant } from "./candidates";
 import { ReuseSettings } from "./config";
 import { density, loudness, register } from "./state";
 
@@ -17,6 +18,8 @@ const LOOP_CONFIDENCE = 0.75;
 export interface Asked {
   bar: number;
   pattern: string;
+  /** For a concrete bar, the variation: reused, the same bar plays again on the new chords. */
+  variant?: Variant;
   energy: number;
   provider: string;
   confidence?: number;
@@ -34,6 +37,8 @@ export interface Fingerprint {
 }
 
 export interface FingerprintContext {
+  /** What the band plan asks of the bar: a build changes it every bar, so builds are always asked. */
+  plan?: string;
   instrument: Instrument;
   targetBar: number;
   direction: string;
@@ -81,6 +86,7 @@ export const fingerprint = (analysis: BandAnalysis, transport: TransportState, c
       parts,
       latest,
       analysis.chordAt(context.targetBar).source,
+      context.plan ?? "",
     ]),
   };
 };

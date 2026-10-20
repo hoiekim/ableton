@@ -56,6 +56,12 @@ Bun.serve({
       if (server.upgrade(req)) return;
       return new Response("Expected a WebSocket upgrade", { status: 426 });
     }
+    // /api/plans/<bar>: the band plan made in that bar, what was asked and answered.
+    const planned = pathname.match(/^\/api\/plans\/(\d+)$/);
+    if (planned) {
+      const detail = session.planDetail(Number(planned[1]));
+      return detail ? Response.json(detail) : new Response("No such plan (only the latest are kept)", { status: 404 });
+    }
     // /api/decisions/<deviceId>/<bar>: what a player sent and got back for that bar.
     const decision = pathname.match(/^\/api\/decisions\/(\d+)\/(\d+)$/);
     if (decision) {

@@ -21,7 +21,13 @@ const config: UserSessionConfig = {
       midPhrase: true, // mid-phrase bars where nothing changed since the last call
       silentBars: 2, // bars of a silent band still asked about before the answer holds
     },
+    // Concrete bars to choose from instead of pattern names (docs/DESIGN.md, "Concrete bars").
+    candidates: { max: 32 },
+    // Draw among Jev's top answers: those within 70% of the top, keeping the current part favoured.
+    sampling: { band: 0.7, stickiness: 1.5 },
   },
+  // The band plan: phrases planned ahead by Jev for all players (docs/DESIGN.md, "Band plan").
+  plan: { phrases: 4 },
   timing: {
     fireMarginMs: 150,
   },

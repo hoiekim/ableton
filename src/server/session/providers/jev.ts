@@ -1,6 +1,8 @@
 import { SessionConfig } from "../config";
 import { clamp } from "../music";
 import { HOLD, HOLD_DESCRIPTION } from "../patterns";
+import { pickFromOdds } from "../candidates";
+import { planQuestions } from "../plan";
 import { decideLocally } from "./local";
 import { Decision, DecisionProvider, DecisionRequest } from "./types";
 
@@ -41,6 +43,27 @@ export const buildQuestions = (request: DecisionRequest, config: SessionConfig["
     request.cueAt !== undefined
       ? "A fill cues the band into what comes next: play one now if someone just asked for a cue, a fill or a change; otherwise only in the last bar of a phrase."
       : "Fills go in the last bar of a phrase, leading into the next phrase or a new section; never in a bar that starts a phrase.";
+  const join = request.joinBar !== undefined && {
+    join: {
+      type: "noul",
+      instructions:
+        `${preamble}You haven't started playing yet; you're set to come in at bar ${request.joinBar}. Start playing in the next bar instead. ` +
+        "Start if someone just told the band to go, counted in, or asked you to come in; wait if they only asked whether everyone is ready, or said something else.",
+    },
+  };
+  // Concrete bars: each option is the part itself, energy and any fill included.
+  if (request.candidates?.length) {
+    return {
+      pattern: {
+        type: "choice",
+        instructions:
+          `${preamble}You are the ${request.instrument} player in a live jam. Choose exactly what to play next. ` +
+          "Each option is a concrete part, with how it sits with the band and how it differs from what you just played.",
+        criteria: Object.fromEntries(request.candidates.map((candidate) => [candidate.id, candidate.description])),
+      },
+      ...join,
+    };
+  }
   const criteria: Record<string, string> = Object.fromEntries(request.patterns.map((p) => [p.id, p.description]));
   if (request.previous) criteria[HOLD] = HOLD_DESCRIPTION;
   return {
@@ -60,15 +83,51 @@ export const buildQuestions = (request: DecisionRequest, config: SessionConfig["
       type: "noul",
       instructions: `${preamble}Play a fill in the next bar. ${fillRule}`,
     },
-    ...(request.joinBar !== undefined && {
-      join: {
-        type: "noul",
-        instructions:
-          `${preamble}You haven't started playing yet; you're set to come in at bar ${request.joinBar}. Start playing in the next bar instead. ` +
-          "Start if someone just told the band to go, counted in, or asked you to come in; wait if they only asked whether everyone is ready, or said something else.",
-      },
-    }),
+    ...join,
   };
+};
+
+/**
+ * Jev's answer among concrete bars. With sampling on, the bar is drawn from
+ * its top answers (keeping the current part favoured). Many options are
+ * variations of a few patterns, so its certainty is judged per pattern: the
+ * probability of all the bars made from the chosen one.
+ */
+const chooseCandidate = (
+  request: DecisionRequest,
+  received: { answers: JevAnswers },
+  questions: unknown,
+  config: SessionConfig["jev"]
+): Decision => {
+  const { answers } = received;
+  const candidates = request.candidates!;
+  const asked = request.joinBar !== undefined && answers.join;
+  const join = asked ? answers.join!.noul >= 0.5 : undefined;
+  const probabilities = answers.pattern.probabilities ?? { [answers.pattern.choice]: answers.pattern.confidence };
+  const previous = request.bar?.previous;
+  const sticky = candidates.find(
+    (c) => !c.fill && previous && c.pattern === previous.pattern && c.variant === previous.variant && c.energy === previous.energy
+  )?.id;
+  const id = (config.sampling && pickFromOdds(probabilities, request.seed, { ...config.sampling, sticky })) || answers.pattern.choice;
+  const seen = {
+    join,
+    odds: Object.entries(probabilities)
+      .map(([pattern, p]) => ({ pattern, p }))
+      .sort((a, b) => b.p - a.p)
+      .slice(0, 3),
+    joinP: asked ? answers.join!.noul : undefined,
+  };
+  const trace = { questions, received };
+  const candidate = candidates.find((c) => c.id === id);
+  const local = (reason: string) => {
+    const decision = decideLocally(request);
+    return { ...decision, ...seen, trace: { ...trace, ranking: decision.trace?.ranking }, fallbackReason: reason };
+  };
+  if (!candidate) return local(`Jev chose an unknown bar "${id}"`);
+  const family = candidates.filter((c) => c.pattern === candidate.pattern).reduce((sum, c) => sum + (probabilities[c.id] ?? 0), 0);
+  if (family < config.minConfidence) return local(`Jev was unsure (${family.toFixed(2)} for ${candidate.pattern})`);
+  const { pattern, variant, energy, fill, notes } = candidate;
+  return { pattern, variant, energy, fill, notes, candidateId: candidate.id, ...seen, provider: "jev", confidence: probabilities[candidate.id], trace };
 };
 
 /**
@@ -78,6 +137,21 @@ export const buildQuestions = (request: DecisionRequest, config: SessionConfig["
  */
 export const createJevProvider = (config: SessionConfig["jev"], fetch: Fetch = globalThis.fetch): DecisionProvider => ({
   name: "jev",
+  plan: async (request, { timeoutMs }) => {
+    const apiKey = process.env.TYPESAFE_API_KEY;
+    if (!apiKey) throw new Error("TYPESAFE_API_KEY isn't set");
+    const baseUrl = (process.env.TYPESAFE_BASE_URL ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+    const questions = planQuestions(request, ENERGY_LEVELS, config.instructions);
+    const response = await fetch(`${baseUrl}/v1/systemone`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: config.model, state: request.state, questions }),
+      signal: AbortSignal.timeout(Math.max(timeoutMs, 50)),
+    });
+    if (!response.ok) throw new Error(`Jev answered ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    const received = (await response.json()) as { answers: Record<string, { choice?: string; score?: number }> };
+    return { answers: received.answers, trace: { questions, received } };
+  },
   decide: async (request, { timeoutMs }): Promise<Decision> => {
     const apiKey = process.env.TYPESAFE_API_KEY;
     if (!apiKey) throw new Error("TYPESAFE_API_KEY isn't set");
@@ -94,6 +168,7 @@ export const createJevProvider = (config: SessionConfig["jev"], fetch: Fetch = g
       throw new Error(`Jev answered ${response.status}${detail ? `: ${detail}` : ""}`);
     }
     const received = (await response.json()) as { answers: JevAnswers };
+    if (request.candidates?.length) return chooseCandidate(request, received, questions, config);
     const { answers } = received;
     const { choice, confidence } = answers.pattern;
     const energy = request.energyOverride ?? clamp(Math.round((answers.energy?.score ?? 4) + 1), 1, 10);

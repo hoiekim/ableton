@@ -83,6 +83,8 @@ its track.
 | `providers/` | `local.ts` (rules) and `jev.ts`, behind one `DecisionProvider` interface. |
 | `player.ts` | The scheduler: when to decide, writing and firing clips, misses, latency learning. |
 | `reuse.ts` | When a decision can reuse the decision model's last answer instead of calling: the change fingerprint, the silent-band check and the rule. |
+| `candidates.ts` | The concrete bars offered for a decision: recipes (pattern, variation, energy), rendered, described, and sampled from the decision model's odds. |
+| `plan.ts` | The band plan: sections and endings, what a plan asks of each bar, and the arranger's questions and answers. |
 | `voice.ts` | Speech to text: starts whisper-server, waits for each take's file to be written, transcribes it, filters noise, deletes the file. |
 | `config.ts` | Defaults, merged with [session.config.ts](../session.config.ts) and environment variables. |
 | [live.ts](../src/server/live.ts) | Bridge additions: Session device parameters, and clip operations (`clipSlots`, `writeClip`, `fireClip`, `stopTrack`). |
@@ -181,7 +183,7 @@ decision model knows what it is playing.
 ## Timing model
 
 - **As late as possible.** Each bar is decided as late as the expected times
-  allow, for the most context. The lead time is the slowest of the last 20
+  allow, for the most context. The lead time is 1.25 × the slowest of the last 20
   decision times, plus the usual clip-write time, the fire margin (150 ms) and
   one engine tick. The slowest, not a percentile, because network answers have
   long tails and a late answer is wasted.
@@ -239,6 +241,78 @@ its decision is due:
 - **Not done:** asking once for all players together, which would halve calls
   and let them decide as a pair, but changes the questions and may slow the
   answer.
+
+## Concrete bars
+
+The decision model used to choose among pattern names ("backbeat",
+"breakbeat"), with energy and fills asked apart. Tested against Jev, concrete
+options do better when each one comes with facts worked out in code: told to
+lock in with a bass on 1, 2&, 3, 4&, Jev picked "backbeat" (58%) from names, spread
+thin over 24 bare note lists (top 18%, not the locked one), and put 89% on the
+locked bars once each said "kick lands with 4 of the bass's 4 notes (locked)".
+Four times the options didn't slow it down (about 85 ms).
+
+[candidates.ts](../src/server/session/candidates.ts) offers up to 32 bars per
+decision, in 2–5 ms:
+
+- **Recipes:** a pattern, a variation and an energy. The same recipe plays the
+  same notes on the same chords (its random choices are seeded by the recipe),
+  so "same as your last bar" is exact and a reused or late answer replays it.
+- **Which:** the last bar's recipe; every pattern within 2 of the energy wanted;
+  the variations of the leading ones (drums: locked to the bass, ghost notes,
+  lighter, busier hats, an open hat; melodic: locked to the band, answering the
+  melody, sparser, syncopated, octaves, short or held notes); a notch harder
+  and softer; a rest; and where a fill may go, fill versions of the leading six.
+  Identical renderings are offered once.
+- **Descriptions** (under 50 tokens): what the variation is for, what it plays
+  ("Swung: kick 1, 3; snare 2, 4; 8th hats."), then facts: energy, hits shared
+  with the part it should lock with, hits in the melody's rests, how busy it is
+  next to the band and to the player's last bar, how many notes differ from the
+  last bar, and its ending.
+- **Energy and fills** come with the bar, so those questions go away; the
+  energy wanted is the plan's, else the band's (a silent band keeps the
+  player's, unless it was resting), plus the Style's mood words.
+- **Choosing:** Jev's pick is drawn among its answers within 70% of the top,
+  weighted by probability, with the bar that keeps the current part counting
+  1.5× (seeded by the bar, so it's reproducible). Certainty is judged per
+  pattern (all the bars made from it), since many options are variations of a
+  few. Local rules score each bar by its pattern's rank, energy closeness,
+  continuity and locking, so a late answer still gets a sensible bar.
+- **Off switch:** `jev.candidates: false` or `SESSION_CANDIDATES=0` restores the
+  named patterns with the energy and fill questions.
+
+## Band plan
+
+An arranger call, once per phrase for the whole band
+([plan.ts](../src/server/session/plan.ts), engine `requestPlan`):
+
+- **What's planned:** the next 4 phrases (16 bars). Per phrase a section
+  (groove, build, climax, breakdown, break, half-time, variation, outro) and an
+  ending (none, fill, big fill, stop), plus an overall intensity: 9 questions in
+  one call, about 2,900 tokens, answered in about 80–120 ms.
+- **When:** on Play; as each phrase reaches its last bar (a full bar ahead of
+  the next phrase); and straight away when someone speaks, the Style changes,
+  a part starts or stops over 2 bars, or the band's energy moves by 3. One plan
+  at a time; the current plan stands until the next answer.
+- **Revising:** each question has a **keep** option for what's already
+  planned, and the arranger reads its plan so far ("bars 9–12 BUILD (ends with a
+  big fill); …"). In tests it started with grooves, re-planned to builds into a
+  climax when the Style asked for "a dramatic build into a climax", and later
+  wound down into an outro with stops.
+- **Following it** (`targetFor`): a build rises from just under the intensity
+  to 2 above it over the phrase, a breakdown and an outro fall, a climax is at
+  least 8, a break is 1. The bar's options are made at that energy, endings are
+  binding in the phrase's last bar (a big fill takes the last two beats, louder;
+  a stop keeps only beat 1), and a break offers only the rest, plus pickup fills
+  when it ends with one. A cue can still bring a fill. Each bar's state text
+  gets a line: "Band plan (made in bar 8): this phrase is a BUILD, bar 3 of 4,
+  aim for energy 6; it ends with a big fill. Then: CLIMAX…". Its target is part
+  of the reuse fingerprint, so bars inside a build are always asked.
+- **On the page:** a Band plan lane shows what was planned for each bar as that
+  bar came; `GET /api/plans/<bar>` serves what the arranger was asked and
+  answered.
+- **Off switch:** `plan: false` or `SESSION_PLAN=0`; without Jev there's no
+  plan. With concrete bars off, the plan is only read, not enforced.
 
 ## Style direction
 
@@ -414,13 +488,16 @@ stopped would start the transport.
   its port (9103) and the confidence floor for transcripts.
 - **Reusing answers:** `jev.reuse` sets `midPhrase` and `silentBars`;
   `reuse: false` calls for every decision.
+- **Concrete bars and sampling:** `jev.candidates` (`max`), `jev.sampling`
+  (`band`, `stickiness`); `false` turns either off.
+- **Band plan:** `plan` (`phrases` ahead); `false` turns it off.
 - **Environment:** `TYPESAFE_API_KEY` (read from `.env`), `TYPESAFE_BASE_URL`,
   `SESSION_PROVIDER`, `SESSION_OSC_PORT`, `SESSION_WHISPER_PORT`,
   `SESSION_WHISPER_MODEL`.
 
 ## Verification
 
-- **Unit tests** (`bun test`, 202 tests):
+- **Unit tests** (`bun test`, 229 tests):
   - chord, key and loop detection
   - every pattern rendering valid notes on the chord
   - OSC decoding and bar cutting
@@ -432,6 +509,8 @@ stopped would start the transport.
   - decision details: what was sent, the local ranking, the notes written, and pending bars
   - reusing answers: the rule for every row of its table, the fingerprint staying put over a loop and changing when a part does, and the scheduler asking at phrase edges, reusing mid-phrase at the last moment, holding through silence and asking again after speech
   - chords from chroma: strong pitch classes, a strum read after its onset, legato changes, ending on quiet, chords told from single notes, hits; the chroma and attack messages
+  - concrete bars: what's offered, the locked bar's kick on the bass's rhythm, descriptions and their length, fills, harder and softer, reproducible recipes, sampling; Jev's single question, sampling and per-pattern certainty
+  - the band plan: energy per section across a phrase, endings in the last bar, the planning questions and keep; players following a plan (a build rising into a big fill, a stop, a break with a pickup)
 - **End to end against the mock bridge** (`bun run mock`):
   - The mock includes clips, launch-quantized playback, device parameters, and a scripted band on Bass, Keys and Vocals. The Vocals part arrives as pitch readings.
   - At 80, 120 and 160 BPM: no missed bars, clips in place about 150 ms or more before their bar, and the guitar's chords matched the band from bar 6 on.
@@ -463,6 +542,18 @@ stopped would start the transport.
   jam-check still had no wrong or missing bars at 80, 120 and 160 BPM. The mock
   had stamped a stopped band's note-offs with a stale position, so notes looked
   held for 8 bars; it now uses the current position.
+- **Concrete bars and the band plan, with Jev on the mock** (live band at 120
+  BPM, the Style set to "dramatic build into a climax" in bar 6, silent bars
+  17–23): no missed bars or late fallbacks over 28 decisions per player. Jev
+  chose variations ("backbeat~open", "build~ghosts", "strum-eighths~lock"). The
+  arranger made 12 plans, 8 on schedule and 4 for real changes, moved from
+  grooves to builds with big fills into a climax, then an outro with stops;
+  energy rose bar by bar inside builds and planned endings landed. With
+  `SESSION_CANDIDATES=0` the run looked as before (names, `hold`, energy and
+  fill questions). jam-check unchanged. Two fixes came from these runs: a silent
+  band's energy was taken from the rest it chose (1), and "shuffle" read like
+  "backbeat" until swing was described. Decisions now allow 25% on top of the
+  slowest recent decision time, after three late fallbacks in one run.
 - **Inputs and strums, against the mock:** switching Listen on for the audio
   Guitar put Session Input Audio first on it, switched on, and removed the
   duplicate; off and on again switched the same device. A MIDI track got
@@ -496,5 +587,5 @@ stopped would start the transport.
 - **Chords from audio:** detect chords from polyphonic audio (chroma, or basic-pitch about a bar behind).
 - **Your clips as options:** let your own clips in the player's track become candidates the model can choose.
 - **Generated options:** candidates from generative models (magenta.js, MIDI-GPT).
-- **Arranger:** a slower LLM "arranger" every 4–8 bars that sets style and density for the per-bar decisions.
+- **More bars to choose from:** real drummers' grooves (Magenta's Groove MIDI Dataset) and a background composer writing grooves for the current Style, as more options.
 - **Device face:** a web view inside the Session Player device showing its decisions.

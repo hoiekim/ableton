@@ -3,6 +3,7 @@ import { Note } from "tonal";
 import { SpeechState, initialTransport } from "common";
 import { BarRecord, UpcomingNotes, analyzeBand } from "./analyze";
 import { SessionConfig, defaultConfig } from "./config";
+import { BandPlan } from "./plan";
 import { ClipSlotInfo, ClipSpec, LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing, msUntilBar } from "./player";
 import { DecisionProvider, decideLocally, localProvider } from "./providers";
@@ -85,12 +86,13 @@ const flush = () => new Promise((resolve) => setImmediate(resolve));
 /** A decision model that answers at once: the local choice, with its own say on fills. */
 const fakeModel = (fill?: boolean, join = true): DecisionProvider => ({
   name: "model",
-  decide: async (request) => ({
-    ...decideLocally(request),
-    ...(fill !== undefined && { fill }),
-    ...(request.joinBar !== undefined && { join }),
-    provider: "model",
-  }),
+  decide: async (request) => {
+    const local = decideLocally(request);
+    // With concrete bars, a fill is an option of its own: take it when offered.
+    const wanted = fill !== undefined && request.candidates?.find((c) => c.fill === fill && c.pattern === local.pattern && c.variant === local.variant);
+    const chosen = wanted ? { ...local, fill: wanted.fill, notes: wanted.notes, candidateId: wanted.id } : { ...local, ...(fill !== undefined && !request.candidates && { fill }) };
+    return { ...chosen, ...(request.joinBar !== undefined && { join }), provider: "model" };
+  },
 });
 
 const setup = (
@@ -103,6 +105,7 @@ const setup = (
     /** Bars in which the band plays nothing. */
     silent?: (bar: number) => boolean;
     config?: SessionConfig;
+    plan?: BandPlan;
   } = {}
 ) => {
   const live = new FakeLive();
@@ -125,6 +128,7 @@ const setup = (
     timing: () => live.clock,
     direction: () => "",
     speech: () => speech,
+    plan: () => options.plan,
     onChange: () => {},
   });
   player.start();
@@ -316,6 +320,27 @@ describe("Player", () => {
     expect(fillBars(cued.live)).toEqual([4, 6, 8]);
   });
 
+  test("plays exactly the concrete bar chosen, offered with its facts", async () => {
+    const { live, player, playUntil } = setup();
+    await playUntil(5);
+    const log = player.state().recent.find((l) => l.bar === 4 && l.outcome === "fired")!;
+    const detail = player.detail(4)!;
+    const chosen = detail.sent.options.find((o) => o.id === (log.variant ? `${log.pattern}~${log.variant}` : log.pattern) || o.id.startsWith(log.pattern))!;
+    expect(chosen.description).toContain("Energy");
+    expect(detail.sent.options.length).toBeGreaterThan(10);
+    const written = live.writes.find((w) => w.spec.name.startsWith("SP 4 "))!;
+    expect(written.spec.notes.length).toBe(log.notes!.length);
+  });
+
+  test("with concrete bars off, the named patterns are offered as before", async () => {
+    const config = { ...defaultConfig, jev: { ...defaultConfig.jev, candidates: false as const } };
+    const { player, playUntil } = setup({ config });
+    await playUntil(5);
+    const detail = player.detail(4)!;
+    expect(detail.sent.options.map((o) => o.id)).toEqual(expect.arrayContaining(["root-eighths", "walking"]));
+    expect(detail.sent.options.some((o) => o.id.includes("~"))).toBe(false);
+  });
+
   test("keeps what each decision was sent and got back, and the notes it wrote", async () => {
     const { live, player, playUntil } = setup();
     let pendingSeen = false;
@@ -402,11 +427,69 @@ describe("Player", () => {
       expect(model.asked).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
     });
 
+    test("a reused answer plays the same bar again, on the new chord", async () => {
+      const model = countingModel();
+      const { player, playUntil } = setup({ provider: model.provider });
+      await playUntil(13);
+      const reused = player.state().recent.find((log) => log.reused)!;
+      const asked = player.detail(reused.reused!.from)!.log;
+      expect([reused.pattern, reused.variant, reused.energy]).toEqual([asked.pattern, asked.variant, asked.energy]);
+    });
+
     test("local rules are never reused: they cost nothing", async () => {
       const { player, playUntil } = setup();
       await playUntil(13);
       expect(reusedBars(player)).toEqual([]);
       expect(player.state().stats.calls).toBe(0);
+    });
+  });
+
+  describe("following the band plan", () => {
+    const plan: BandPlan = {
+      decidedAt: 4,
+      intensity: 5,
+      provider: "model",
+      phrases: [
+        { start: 5, section: "build", ending: "big-fill" },
+        { start: 9, section: "climax", ending: "stop" },
+        { start: 13, section: "break", ending: "fill" },
+        { start: 17, section: "groove", ending: "none" },
+      ],
+    };
+    const run = async () => {
+      const { live, player, playUntil } = setup({ plan, settings: { instrument: "drums" } });
+      await playUntil(20);
+      const log = (bar: number) => player.state().recent.find((l) => l.bar === bar)!;
+      const written = (bar: number) => live.writes.find((w) => w.spec.name.startsWith(`SP ${bar} `));
+      return { log, written, player };
+    };
+
+    test("a build rises bar by bar and ends with its big fill", async () => {
+      const { log } = await run();
+      expect([5, 6, 7, 8].map((bar) => log(bar).energy)).toEqual([4, 5, 6, 7]);
+      expect([5, 6, 7].map((bar) => log(bar).fill)).toEqual([false, false, false]);
+      expect(log(8).fill).toBe(true);
+    });
+
+    test("a stop plays only beat 1 of the phrase's last bar", async () => {
+      const { log, written } = await run();
+      expect(log(10).energy).toBe(8);
+      const stop = written(12)!.spec.notes;
+      expect(stop.length).toBeGreaterThan(0);
+      expect(stop.every((n) => n.start === 0)).toBe(true);
+    });
+
+    test("a break rests, then picks up into the next phrase", async () => {
+      const { log, written } = await run();
+      expect([13, 14, 15].map((bar) => log(bar).pattern)).toEqual(["rest", "rest", "rest"]);
+      const pickup = written(16)!.spec.notes;
+      expect(log(16).fill).toBe(true);
+      expect(pickup.every((n) => n.start >= 3)).toBe(true);
+    });
+
+    test("each bar's decision reads the plan", async () => {
+      const { player } = await run();
+      expect(player.detail(7)!.sent.state).toContain("Band plan (made in bar 4): this phrase is a BUILD, bar 3 of 4, aim for energy 6; it ends with a big fill.");
     });
   });
 

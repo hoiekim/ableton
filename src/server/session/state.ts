@@ -16,6 +16,8 @@ export interface PlayerContext {
   direction?: string;
   /** What was just said or sung, oldest first. */
   speech?: HeardSpeech[];
+  /** The band plan, in a line, for this bar. */
+  plan?: string;
 }
 
 const ROLE_NAMES = { bass: "Bass", chords: "Chords", melody: "Melody", drums: "Drums" } as const;
@@ -41,7 +43,7 @@ const rhythm = (grid: string) => {
   return "syncopated sixteenths";
 };
 
-const describePart = (part: PartFeatures) => {
+export const describePart = (part: PartFeatures) => {
   const sustained = part.polyphony >= 2 && part.onsets <= 4;
   const feel = sustained ? "sustained chords" : `${density(part.onsets)}, ${rhythm(part.grid)}`;
   return `${ROLE_NAMES[part.role]} (${part.trackName}): ${feel}, ${part.onsets} new notes, ${register(part.register)} register, ${loudness(part.velocity)}.`;
@@ -62,6 +64,7 @@ export const describeState = (analysis: BandAnalysis, transport: TransportState,
   const { targetBar, phraseLength } = player;
   if (player.direction) lines.push(`The musician wants: "${player.direction}".`);
   for (const said of player.speech ?? []) lines.push(`Heard on ${said.trackName} ${said.when}: "${said.text}"`);
+  if (player.plan) lines.push(player.plan);
   const signature = `${transport.signatureNumerator}/${transport.signatureDenominator}`;
   lines.push(
     `The next bar is bar ${targetBar} of the jam. Tempo ${Math.round(transport.tempo)} BPM, ${signature} time.` +

@@ -113,6 +113,8 @@ export interface DecisionLog {
   /** Bars the clip lasts (the device's clip length). */
   length: number;
   pattern: string;
+  /** For a concrete bar: how it varies the pattern ("lock", "ghosts"...); absent for the plain pattern. */
+  variant?: string;
   energy: number;
   fill: boolean;
   /** Chord per bar the clip was rendered against. */
@@ -270,6 +272,43 @@ export interface TimelineBar {
   heard: Record<number, CompactNote[]>;
 }
 
+/** What the band plan says for one bar, as it stood when the bar came. */
+export interface PlannedBar {
+  bar: number;
+  /** "groove", "build", "climax", "breakdown", "break", "half-time", "variation" or "outro". */
+  section: string;
+  /** The phrase's first bar. */
+  start: number;
+  /** In the phrase's last bar: "none", "fill", "big-fill" or "stop". */
+  ending?: string;
+  /** The bar the plan was made in. */
+  decidedAt: number;
+}
+
+/** The band plan the decision model made (see plan.ts on the server). */
+export interface PlanState {
+  decidedAt: number;
+  intensity: number;
+  provider: string;
+  phrases: { start: number; section: string; ending: string }[];
+  /** Recent and coming bars. */
+  bars: PlannedBar[];
+  /** Plans asked for so far. */
+  calls: number;
+  /** Set when the last plan couldn't be made. */
+  problem?: string;
+}
+
+/** Everything about one plan, served on request (GET /api/plans/<decidedAt>). */
+export interface PlanDetail {
+  decidedAt: number;
+  phrases: { start: number; section: string; ending: string }[];
+  intensity: number;
+  sent: { state: string; questions: unknown };
+  received?: unknown;
+  ms: number;
+}
+
 /** A Session Voice device: it records what's said or sung on its track for the players. */
 export interface VoiceState {
   deviceId: number;
@@ -311,6 +350,8 @@ export interface SessionState {
   transcriber: TranscriberState;
   /** The last bars the inputs played, oldest first, ending with the bar in progress. */
   timeline: TimelineBar[];
+  /** The band plan, when the decision model makes one. */
+  plan?: PlanState;
   /** Something to tell the musician, e.g. that an input was added to a track (Unix ms). */
   notice?: { text: string; tone: "info" | "error"; at: number };
 }

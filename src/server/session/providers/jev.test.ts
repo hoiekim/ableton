@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { analyzeBand } from "../analyze";
 import { defaultConfig } from "../config";
+import { generateCandidates } from "../candidates";
+import { STANDARD_KIT } from "../instrument";
+import { chordFromSymbol } from "../music";
 import { builtInPatterns, optionsFor } from "../patterns";
 import { createJevProvider } from "./jev";
 import { DecisionRequest } from "./types";
@@ -97,6 +100,59 @@ describe("Jev provider", () => {
     const normal = await jev.decide(request(), { timeoutMs: 1000 });
     expect(api.calls[1].body.questions.join).toBeUndefined();
     expect(normal.join).toBeUndefined();
+  });
+
+  describe("with concrete bars", () => {
+    const bar = {
+      instrument: "drums" as const,
+      options: optionsFor("drums", undefined),
+      chords: [chordFromSymbol("Am7")!],
+      beatsPerBar: 4,
+      beatLength: 1,
+      energy: 6,
+      ending: "none" as const,
+      accent: false,
+      kit: STANDARD_KIT,
+      trackId: 3,
+      previous: { pattern: "backbeat", variant: "base" as const, energy: 6 },
+      band: [],
+      max: 32,
+    };
+    const candidates = generateCandidates(bar);
+    const concrete = () => request({ instrument: "drums", patterns: bar.options, candidates, bar });
+    const answering = (probabilities: Record<string, number>) =>
+      fakeApi({ pattern: { type: "choice", choice: Object.keys(probabilities)[0], confidence: 0.4, probabilities } });
+
+    test("asks one question listing the bars; energy and fills come with each bar", async () => {
+      const api = answering({ "backbeat~ghosts": 0.6, backbeat: 0.1 });
+      const decision = await createJevProvider({ ...defaultConfig.jev, sampling: false }, api.fetch).decide(concrete(), { timeoutMs: 1000 });
+      const { questions } = api.calls[0].body;
+      expect(Object.keys(questions)).toEqual(["pattern"]);
+      expect(Object.keys(questions.pattern.criteria)).toEqual(candidates.map((c) => c.id));
+      const chosen = candidates.find((c) => c.id === "backbeat~ghosts")!;
+      expect(decision).toMatchObject({ pattern: "backbeat", variant: "ghosts", energy: 6, fill: false, candidateId: chosen.id, provider: "jev" });
+      expect(decision.notes).toEqual(chosen.notes);
+    });
+
+    test("picks among the top answers, the same way for the same bar", async () => {
+      const api = answering({ backbeat: 0.36, "backbeat~lock": 0.34, "backbeat~thin": 0.3 });
+      const jev = createJevProvider(defaultConfig.jev, api.fetch);
+      const picks = new Set<string>();
+      for (let seed = 0; seed < 30; seed++) picks.add((await jev.decide({ ...concrete(), seed }, { timeoutMs: 1000 })).candidateId!);
+      expect(picks.size).toBeGreaterThan(1);
+      const again = await jev.decide({ ...concrete(), seed: 7 }, { timeoutMs: 1000 });
+      expect((await jev.decide({ ...concrete(), seed: 7 }, { timeoutMs: 1000 })).candidateId).toBe(again.candidateId!);
+    });
+
+    test("judges certainty by pattern, and falls back to local rules when unsure", async () => {
+      // Spread over backbeat's variations, it's sure enough about backbeat.
+      const sure = await createJevProvider({ ...defaultConfig.jev, sampling: false }, answering({ backbeat: 0.15, "backbeat~ghosts": 0.12, "backbeat~thin": 0.1 }).fetch).decide(concrete(), { timeoutMs: 1000 });
+      expect(sure.provider).toBe("jev");
+      const unsure = await createJevProvider({ ...defaultConfig.jev, sampling: false }, answering({ sparse: 0.1, backbeat: 0.09 }).fetch).decide(concrete(), { timeoutMs: 1000 });
+      expect(unsure).toMatchObject({ provider: "local" });
+      expect(unsure.fallbackReason).toContain("Jev was unsure");
+      expect(unsure.notes).toBeDefined();
+    });
   });
 
   test("leaves out the energy question when the device sets energy", async () => {

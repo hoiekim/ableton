@@ -92,9 +92,26 @@ Melody for single notes, Drums for hits only, and Auto chooses chords when 3 or
 more pitch classes keep sounding. Without FluCoMa the device works as before.
 
 How it decides: the server sums up the band as text (chords, predicted next
-chord, key, rhythm, energy, where the phrase is) and asks a decision model to
-pick one of the instrument's patterns, an energy level and whether to fill. The
-pattern is then played on the right chords.
+chord, key, rhythm, energy, where the phrase is) and offers the decision model
+about 30 **concrete bars** to choose from: each of the instrument's patterns
+near the energy wanted, variations of them (locked to the bass, ghost notes,
+lighter, busier, syncopated, an octave up…), a notch harder or softer, what it
+played last bar, and fills where a fill may go. Each option says what it plays
+("kick 1, 2&, 3, 4&; snare 2, 4; 8th hats") and how it sits with the band,
+worked out in code ("kick lands with 4 of the 4 Bass notes (locked)", "lighter
+than your last bar"). The chosen bar is written exactly. With Jev, the pick is
+drawn among its top answers, favouring the part already playing, so it varies
+without flip-flopping.
+
+With Jev, a **band plan** shapes the jam: an arranger call plans the next 16
+bars for all players at once, a section per 4-bar phrase (groove, build,
+climax, breakdown, break, half-time, variation, outro) and how each ends (a
+fill, a big fill, a stop). It's planned again before every phrase, and straight
+away when someone speaks, the Style changes, or the band changes sharply; Jev
+can keep or change what it planned. The players follow it: a build rises bar by
+bar, a climax is loud, a break rests, endings land on the phrase's last bar,
+while each bar still chooses the notes. The Dashboard shows the plan as a lane
+above the players; click a block for what the arranger was asked and answered.
 
 The next bar's chord comes from the band's clips when it plays them: for each
 MIDI track with a Session Input, the server reads the clip that's playing (and
@@ -117,6 +134,9 @@ answer instead of calling again, with no decision time to wait for. About half
 the calls are saved in a steady groove, and none in a jam that keeps changing.
 The Dashboard marks reused bars and counts calls per player; `jev.reuse` in
 [session.config.ts](session.config.ts) tunes it, and `reuse: false` asks every bar.
+`jev.candidates: false` (or `SESSION_CANDIDATES=0`) goes back to offering the
+pattern names, `jev.sampling: false` always takes Jev's top answer, and
+`plan: false` (or `SESSION_PLAN=0`) turns the band plan off.
 
 To steer the style, type it in the Session panel's **Style** box, for example
 "funky 70s soul, laid back" or "driving punk rock". Jev reads it with every

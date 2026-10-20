@@ -2,12 +2,17 @@ import { CompactNote, DecisionDetail, DecisionLog, Instrument, PlayerState, Play
 import { BandAnalysis } from "./analyze";
 import { p90, slowest } from "./clock";
 import { SessionConfig } from "./config";
-import { ChordInfo, ClipNote, clamp, compactNote, hashString, seededRandom, triad } from "./music";
+import { ChordInfo, ClipNote, clamp, compactNote, fitNotes, hashString, seededRandom, triad } from "./music";
+
+export { fitNotes };
 import { InstrumentProfile, STANDARD_KIT } from "./instrument";
 import { ClipSlotInfo, LiveOps } from "./ops";
 import { Option, optionsFor } from "./patterns";
 import { Decision, DecisionProvider, DecisionRequest, decideLocally } from "./providers";
+import { BarContext, Recipe, generateCandidates, renderRecipe } from "./candidates";
+import { BandPlan, describeTarget, targetFor } from "./plan";
 import { Asked, bandQuiet, fingerprint, reuseReason } from "./reuse";
+import { energyBias } from "./style";
 import { describeState } from "./state";
 
 export interface PlayerSettings {
@@ -50,6 +55,8 @@ export interface PlayerDeps {
   direction: () => string;
   /** What was said or sung on the Session Voice tracks, newest first. */
   speech: () => SpeechState[];
+  /** The band plan, when the decision model has made one. */
+  plan?: () => BandPlan | undefined;
   onChange: () => void;
 }
 
@@ -83,6 +90,7 @@ interface Playing {
   bar: number;
   length: number;
   pattern: string;
+  variant?: Recipe["variant"];
   energy: number;
   fill: boolean;
   slotIndex: number;
@@ -101,6 +109,8 @@ const MIN_FIRE_MS = 25;
 const TICK_SLACK_MS = 20;
 /** Longest a decision request may take before it's abandoned. */
 const PROVIDER_TIMEOUT_MS = 10000;
+/** Room on top of the slowest recent decision: an answer only a little slower would otherwise come too late. */
+const DECISION_HEADROOM = 1.25;
 /** Time to work out a reused decision (the band's analysis, the notes) before writing it. */
 const REUSE_SLACK_MS = 30;
 /** Phrases heard this many bars back (8 s at least) are told to the decision model. */
@@ -124,16 +134,6 @@ export const msUntilBar = (bar: number, timing: Timing) => {
 };
 
 /** The notes that start inside a clip of `length` beats, kept within it and within MIDI's ranges. */
-export const fitNotes = (notes: ClipNote[], length: number) => {
-  return notes
-    .filter((note) => note.start >= 0 && note.start < length - 1e-4)
-    .map((note) => ({
-      pitch: clamp(Math.round(note.pitch), 0, 127),
-      start: note.start,
-      duration: clamp(note.duration, 0.01, length - note.start),
-      velocity: clamp(Math.round(note.velocity), 1, 127),
-    }));
-};
 
 /**
  * Plays one Session Player device's part. For each upcoming bar it decides
@@ -357,7 +357,9 @@ export class Player {
   /** What the decision for a bar depends on, to tell whether anything changed since the last call. */
   private fingerprintFor = (bar: number, analysis: BandAnalysis) => {
     const { energy } = this.settings;
+    const target = targetFor(this.deps.plan?.(), bar, this.deps.config.phraseLength);
     return fingerprint(analysis, this.deps.transport(), {
+      plan: target && `${target.section} ${target.energy} ${target.lastBar ? target.ending : ""}`,
       instrument: this.role(),
       targetBar: bar,
       direction: this.deps.direction(),
@@ -393,8 +395,8 @@ export class Player {
     if (decision.reused) return;
     this.lastWasFallback = !!decision.fallbackReason || decision.provider === "local";
     if (asked && !this.lastWasFallback) {
-      const { pattern, energy, provider, confidence } = decision;
-      this.asked = { bar, pattern, energy, provider, confidence, fingerprint: this.fingerprintFor(bar, analysis) };
+      const { pattern, variant, energy, provider, confidence } = decision;
+      this.asked = { bar, pattern, variant, energy, provider, confidence, fingerprint: this.fingerprintFor(bar, analysis) };
     }
   };
 
@@ -404,7 +406,11 @@ export class Player {
    * How long to allow for a decision: the slowest recent one. Network answers
    * have long tails, and an answer that misses its bar is wasted.
    */
-  private decisionLead = () => slowest(this.decisionSamples, this.deps.config.timing.initialDecisionMs);
+  private decisionLead = () =>
+    slowest(
+      this.decisionSamples.map((ms) => ms * DECISION_HEADROOM),
+      this.deps.config.timing.initialDecisionMs
+    );
 
   private writeEstimate = () => p90(this.writeSamples, this.deps.config.timing.initialWriteMs);
 
@@ -434,7 +440,11 @@ export class Player {
       .reverse()
       .map((said) => ({ text: said.text, trackName: said.trackName, when: whenSaid(said, timing) }));
     const cue = this.heard(timing, CUE_BARS)[0];
+    const candidates = this.candidatesFor(bar, analysis, before?.prepared?.decision, cue?.at);
+    const plan = this.deps.plan?.();
+    const target = targetFor(plan, bar, config.phraseLength);
     const state = describeState(analysis, transport(), {
+      plan: plan && target ? describeTarget(plan, target) : undefined,
       instrument,
       targetBar: bar,
       phraseLength: config.phraseLength,
@@ -460,8 +470,80 @@ export class Player {
       cueAt: cue?.at,
       // Only a decision model reads speech, so only it is asked early.
       joinBar: this.deps.provider.name !== "local" && !this.joined && bar < this.joinBar ? this.joinBar : undefined,
+      candidates: candidates?.candidates,
+      bar: candidates?.context,
       seed: hashString(`${this.settings.trackId}:${bar}`),
     };
+  };
+
+  /**
+   * The concrete bars to offer for a bar (see candidates.ts), unless they're
+   * turned off: aimed at the band's energy, continuing from what plays just
+   * before, with fills offered where a fill may go.
+   */
+  private candidatesFor = (bar: number, analysis: BandAnalysis, before: Decision | undefined, cueAt: number | undefined) => {
+    const { config, transport } = this.deps;
+    const settings = config.jev.candidates;
+    if (!settings) return undefined;
+    const signature = transport();
+    const beatsPerBar = (signature.signatureNumerator * 4) / signature.signatureDenominator;
+    const { chords, next } = this.chordsFor(bar, analysis);
+    const length = this.settings.length;
+    const last = before ?? this.playing;
+    const previous: Recipe | undefined = last && { pattern: last.pattern, variant: last.variant ?? "base", energy: last.energy };
+    const latest = analysis.bars.filter((b) => !b.partial).slice(-1)[0];
+    const current = analysis.bars[analysis.bars.length - 1];
+    const band = (current?.partial && current.parts.length ? current : latest)?.parts ?? [];
+    const silent = !(latest?.parts ?? []).some((part) => part.onsets);
+    const { energy } = this.settings;
+    // The band plan sets the energy and how phrases end; without one, the band does.
+    const plan = this.deps.plan?.();
+    const planned = targetFor(plan, bar, config.phraseLength);
+    const ends = targetFor(plan, bar + length - 1, config.phraseLength);
+    // A silent band keeps the energy the player had; resting says nothing about it.
+    const held = previous && previous.pattern !== "rest" ? previous.energy : 4;
+    const target =
+      energy !== "auto"
+        ? energy
+        : (planned?.energy ?? clamp(Math.round((silent ? held : analysis.energy) + energyBias(this.deps.direction())), 1, 10));
+    // Fills go in a phrase's last bar, or anywhere just after someone asked for a cue.
+    // The plan's endings are binding; a cue can still bring a fill.
+    const endsPhrase = (bar + length - 1) % config.phraseLength === 0;
+    const cued = cueAt !== undefined && cueAt > this.cueUsedAt;
+    const free = (endsPhrase || cued) && bar - this.lastFillBar >= 2 ? "offer" : "none";
+    const fill: BarContext["ending"] = !ends
+      ? free
+      : ends.lastBar && ends.ending !== "none"
+        ? ends.ending
+        : cued && bar - this.lastFillBar >= 2
+          ? "offer"
+          : "none";
+    const context: BarContext = {
+      instrument: this.role(),
+      options: this.patterns(),
+      chords,
+      nextChord: next,
+      beatsPerBar,
+      beatLength: 4 / signature.signatureDenominator,
+      energy: target,
+      ending: fill,
+      rest: planned?.section === "break",
+      accent: !!last?.fill && this.role() === "drums",
+      kit: this.profile?.kind === "drums" ? this.profile.kit : STANDARD_KIT,
+      trackId: this.settings.trackId,
+      previous,
+      band,
+      max: settings.max,
+    };
+    return { context, candidates: generateCandidates(context) };
+  };
+
+  /** A recipe played again on this bar's chords: a reused answer, or one that came too late for its own bar. */
+  private replay = (decision: Decision, request: DecisionRequest): Decision => {
+    if (!request.bar) return { ...decision, notes: undefined };
+    const recipe = { pattern: decision.pattern, variant: decision.variant ?? "base", energy: decision.energy };
+    const notes = renderRecipe(recipe, request.bar, "none");
+    return { ...decision, variant: recipe.variant, fill: false, notes };
   };
 
   private decide = async (bar: number, reuse?: string) => {
@@ -473,11 +555,11 @@ export class Player {
       let decision: Decision;
       let asked = false;
       if (this.carry) {
-        decision = { ...this.carry };
+        decision = this.carry.notes ? this.replay(this.carry, request) : { ...this.carry };
         this.carry = undefined;
       } else if (reuse && this.asked) {
-        const { pattern, energy, provider, confidence } = this.asked;
-        decision = { pattern, energy, fill: false, provider, confidence, reused: { from: this.asked.bar, reason: reuse } };
+        const { pattern, variant, energy, provider, confidence } = this.asked;
+        decision = this.replay({ pattern, variant, energy, fill: false, provider, confidence, reused: { from: this.asked.bar, reason: reuse } }, request);
         this.reusedCount++;
       } else {
         decision = await this.ask(request, bar);
@@ -595,19 +677,42 @@ export class Player {
       patterns.find((p) => p.id === decision.pattern) ??
       patterns.find((p) => p.id === decideLocally(request).pattern) ??
       patterns[0];
-    const { chords, next } = this.chordsFor(bar, request.analysis);
+    const { chords, next } = request.bar ? { chords: request.bar.chords, next: request.bar.nextChord } : this.chordsFor(bar, request.analysis);
     // Fills belong in the last bar of a phrase, leading into the next one,
     // unless someone just asked for a cue: then one may come right away.
+    // A concrete bar was only offered with a fill where one may go.
     const endsPhrase = (bar + length - 1) % config.phraseLength === 0;
     const cued = request.cueAt !== undefined && request.cueAt > this.cueUsedAt;
-    const fill = decision.fill && (endsPhrase || cued) && bar - this.lastFillBar >= 2;
+    const concrete = decision.notes !== undefined;
+    const fill = concrete ? decision.fill : decision.fill && (endsPhrase || cued) && bar - this.lastFillBar >= 2;
     const accent = !!this.playing?.fill && this.role() === "drums";
-    const signature = [pattern.id, decision.energy, chords.map((c) => c.symbol).join(","), fill, accent, length].join("|");
+    const notes = concrete
+      ? fitNotes(decision.notes!, length * beatsPerBar)
+      : fitNotes(
+          pattern.render({
+            chords,
+            nextChord: next,
+            beatsPerBar,
+            beatLength: 4 / signatureTransport.signatureDenominator,
+            energy: decision.energy,
+            fill,
+            accent,
+            kit: this.profile?.kind === "drums" ? this.profile.kit : STANDARD_KIT,
+            random: seededRandom(request.seed),
+          }),
+          length * beatsPerBar
+        );
+    const patternId = concrete ? decision.pattern : pattern.id;
+    const variant = concrete && decision.variant !== "base" ? decision.variant : undefined;
+    const signature = concrete
+      ? JSON.stringify(notes.map((n) => [n.pitch, +n.start.toFixed(3), +n.duration.toFixed(3), n.velocity]))
+      : [pattern.id, decision.energy, chords.map((c) => c.symbol).join(","), fill, accent, length].join("|");
 
     const log: DecisionLog = {
       bar,
       length,
-      pattern: pattern.id,
+      pattern: patternId,
+      variant,
       energy: decision.energy,
       fill,
       chords: chords.map((chord) => chord.symbol),
@@ -636,21 +741,8 @@ export class Player {
       if (!ops) throw new Error("Not connected to Live");
       const ring = await this.ensureRing(ops);
       const slot = this.nextSlot(ring);
-      const notes = fitNotes(
-        pattern.render({
-          chords,
-          nextChord: next,
-          beatsPerBar,
-          beatLength: 4 / signatureTransport.signatureDenominator,
-          energy: decision.energy,
-          fill,
-          accent,
-          kit: this.profile?.kind === "drums" ? this.profile.kit : STANDARD_KIT,
-          random: seededRandom(request.seed),
-        }),
-        length * beatsPerBar
-      );
-      const clipName = `SP ${bar} ${pattern.id} ${chords[0].symbol}${chords.length > 1 ? "…" : ""} e${decision.energy}${fill ? " fill" : ""}`;
+      const name = variant ? `${patternId}~${variant}` : patternId;
+      const clipName = `SP ${bar} ${name} ${chords[0].symbol}${chords.length > 1 ? "…" : ""} e${decision.energy}${fill ? " fill" : ""}`;
       const writeStarted = performance.now();
       const clipId = await ops.writeClip(slot, { name: clipName, color: this.settings.color, length: length * beatsPerBar, notes });
       this.sample(this.writeSamples, performance.now() - writeStarted);
@@ -664,7 +756,7 @@ export class Player {
       await ops.fireClip(clipId);
       if (run !== this.run) return;
       const written = notes.map((note) => compactNote(note.pitch, note.start, note.duration, note.velocity));
-      this.playing = { bar, length, pattern: pattern.id, energy: decision.energy, fill, slotIndex: slot.index, signature, notes: written };
+      this.playing = { bar, length, pattern: patternId, variant: decision.variant, energy: decision.energy, fill, slotIndex: slot.index, signature, notes: written };
       this.joined = true;
       if (fill) this.lastFillBar = bar + length - 1;
       if (fill && !endsPhrase) this.cueUsedAt = request.cueAt!;
@@ -753,7 +845,9 @@ export class Player {
         log,
         sent: {
           state: request.state,
-          options: request.patterns.map(({ id, description, fit }) => ({ id, description, fit })),
+          options: request.candidates
+            ? request.candidates.map(({ id, description }) => ({ id, description, fit: 0 }))
+            : request.patterns.map(({ id, description, fit }) => ({ id, description, fit })),
           questions: trace?.questions,
         },
         received: trace?.received,

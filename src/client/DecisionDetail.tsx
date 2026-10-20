@@ -236,7 +236,8 @@ export const DecisionDetailView = ({ deviceId, trackName, bar, log, pending, bea
             {log.outcome !== "waited" && log.outcome !== "missed" && (
               <>
                 <p className="detailMeta">
-                  {log.pattern} · energy {log.energy}
+                  {log.pattern}
+                  {log.variant && ` (${log.variant})`} · energy {log.energy}
                   {log.fill && " · fill"} · {log.chords.join(" ")}
                 </p>
                 {log.clipName && <p className="detailMeta">Clip "{log.clipName}"</p>}

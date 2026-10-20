@@ -48,12 +48,45 @@ export const decideLocally = (request: DecisionRequest): Decision => {
 
   const fill = position === phraseLength && request.barsSinceFill >= phraseLength - 1 && energy >= 3 && random() < 0.75;
 
+  // Among concrete bars, the energy they were made for (the band plan's, when there is one).
+  if (request.candidates?.length) return pickCandidate(request, ranked, request.bar?.energy ?? energy, fill);
+
   return {
     pattern: ranked[0]?.pattern ?? "rest",
     energy,
     fill,
     provider: "local",
     trace: { ranking: ranked.map(({ pattern, score }) => ({ pattern, score: Math.round(score * 100) / 100 })) },
+  };
+};
+
+/**
+ * Among concrete bars: the one whose pattern the rules rank best, at the
+ * energy they want, keeping what's playing, locked with the bass when it can,
+ * and with a fill only when the rules want one.
+ */
+const pickCandidate = (request: DecisionRequest, ranked: { pattern: string; score: number }[], energy: number, fill: boolean): Decision => {
+  const patternScores = new Map(ranked.map(({ pattern, score }) => [pattern, score]));
+  const previous = request.bar?.previous;
+  const scored = request.candidates!.map((candidate) => {
+    let score = (patternScores.get(candidate.pattern) ?? -10) - Math.abs(candidate.energy - energy) * 1.5;
+    if (candidate.variant !== "base") score -= 0.3;
+    if (previous && candidate.pattern === previous.pattern && candidate.variant === previous.variant && candidate.energy === previous.energy) score += 1;
+    if (candidate.variant === "lock" && candidate.description.includes("(locked)")) score += 0.6;
+    if (request.bar?.ending === "offer") score += candidate.fill === fill ? 3 : -3;
+    return { candidate, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  const { candidate } = scored[0];
+  return {
+    pattern: candidate.pattern,
+    variant: candidate.variant,
+    energy: candidate.energy,
+    fill: candidate.fill,
+    notes: candidate.notes,
+    candidateId: candidate.id,
+    provider: "local",
+    trace: { ranking: scored.slice(0, 12).map(({ candidate, score }) => ({ pattern: candidate.id, score: Math.round(score * 100) / 100 })) },
   };
 };
 

@@ -104,3 +104,15 @@ export const compactNote = (pitch: number, start: number, duration: number, velo
   if (held) note.push(1);
   return note;
 };
+
+/** Notes cut to fit a clip: inside it, in MIDI range, at least a little long. */
+export const fitNotes = (notes: ClipNote[], length: number) => {
+  return notes
+    .filter((note) => note.start >= 0 && note.start < length - 1e-4)
+    .map((note) => ({
+      pitch: clamp(Math.round(note.pitch), 0, 127),
+      start: note.start,
+      duration: clamp(note.duration, 0.01, length - note.start),
+      velocity: clamp(Math.round(note.velocity), 1, 127),
+    }));
+};

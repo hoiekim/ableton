@@ -1135,6 +1135,50 @@ button {
   fill-opacity: 0.65;
 }
 
+/* Band plan */
+
+.planCell {
+  border: 0;
+  border-left: 3px solid var(--plan, var(--session));
+  background: color-mix(in srgb, var(--plan, var(--session)) 16%, var(--surface));
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.planCell.selected {
+  box-shadow: inset 0 0 0 1px var(--plan, var(--session));
+}
+
+.planSection.groove { --plan: var(--session); }
+.planSection.build { --plan: var(--accent); }
+.planSection.climax { --plan: var(--record); }
+.planSection.breakdown { --plan: var(--instrument); }
+.planSection.break { --plan: var(--text-muted); }
+.planSection.half-time { --plan: var(--midi-effect); }
+.planSection.variation { --plan: var(--audio-effect); }
+.planSection.outro { --plan: var(--text-muted); }
+
+.planAnswers,
+.planPhrases {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.planPhrases li {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 8px;
+  border-left: 3px solid var(--plan, var(--session));
+  background: color-mix(in srgb, var(--plan, var(--session)) 12%, transparent);
+}
+
 /* Decision detail */
 
 .DecisionDetail {
