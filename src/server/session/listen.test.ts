@@ -27,6 +27,16 @@ describe("parseOsc", () => {
     expect(parseOsc(packet("/sp/voice", [{ type: "integer", value: 7 }, { type: "float", value: 1.5 }]))).toBeUndefined();
   });
 
+  test("reads chroma frames and spectral onsets from FluCoMa", () => {
+    const chroma = Array.from({ length: 12 }, (_, i) => ({ type: "float" as const, value: i / 10 }));
+    const message = parseOsc(packet("/sp/chroma", [{ type: "integer", value: 4 }, { type: "float", value: 960 }, ...chroma]));
+    expect(message).toMatchObject({ type: "chroma", deviceId: 4, beat: 2 });
+    // OSC floats are 32-bit.
+    expect((message as { chroma: number[] }).chroma.map((value) => Math.round(value * 10) / 10)).toEqual(chroma.map(({ value }) => value));
+    expect(parseOsc(packet("/sp/chroma", [{ type: "integer", value: 4 }, { type: "float", value: 960 }, ...chroma.slice(0, 5)]))).toBeUndefined();
+    expect(parseOsc(packet("/sp/attack", [{ type: "integer", value: 4 }, { type: "float", value: 480 }]))).toEqual({ type: "attack", deviceId: 4, beat: 1 });
+  });
+
   test("reads pitch readings and onsets from audio inputs", () => {
     const reading = parseOsc(
       packet("/sp/pitch", [

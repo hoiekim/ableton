@@ -221,10 +221,10 @@ const sessionPlayer = (instrument: number) =>
     { name: "SP Energy", items: ["Auto", ...Array.from({ length: 10 }, (_, i) => String(i + 1))], value: 0 },
   ]);
 
-const sessionInput = (role: string) =>
+const sessionInput = (role: string, on = 1) =>
   device("Max MIDI Effect", "Session Input", true, [
     { name: "SPI Role", items: ROLES, value: ROLES.indexOf(role) },
-    { name: "SPI On", items: ["Off", "On"], value: 1 },
+    { name: "SPI On", items: ["Off", "On"], value: on },
   ]);
 
 /** Simpler with a sample and an amp envelope (times in ms, sustain 0–1), as Live reports them. */
@@ -263,16 +263,16 @@ const instrumentRack = (name: string, chains: [string, LiveObject[]][]) => {
   return rack;
 };
 
-const sessionInputAudio = (role: string) =>
+const sessionInputAudio = (role: string, on = 1) =>
   device("Max Audio Effect", "Session Input Audio", true, [
     { name: "SPI Role", items: ROLES, value: ROLES.indexOf(role) },
-    { name: "SPI On", items: ["Off", "On"], value: 1 },
+    { name: "SPI On", items: ["Off", "On"], value: on },
     { name: "SPI Threshold", min: -70, max: 0, value: -40 },
   ]);
 
-const sessionVoice = () =>
+const sessionVoice = (on = 1) =>
   device("Max Audio Effect", "Session Voice", true, [
-    { name: "SPV On", items: ["Off", "On"], value: 1 },
+    { name: "SPV On", items: ["Off", "On"], value: on },
     { name: "SPV Threshold", min: -70, max: 0, value: -35 },
   ]);
 
@@ -374,6 +374,10 @@ const song = create(
         sessionPlayer(4),
         instrumentRack("Nylon Guitar", [["Nylon Guitar", [simpler("Nylon Guitar", "Nylon Guitar C3.wav", { attack: 1, decay: 900, sustain: 0.05, release: 300 })]]]),
       ]),
+      // A strummed guitar with no Session Input yet: the web page's Listen switch adds one.
+      track("audio", "Guitar", 0xffb347, [device("Compressor"), device("Reverb")]),
+      // Spare Session devices, switched off, for the Listen switch to copy from.
+      track("midi", "Session Devices", 0x5d5d63, [sessionInput("Auto", 0), sessionInputAudio("Auto", 0), sessionVoice(0)]),
     ],
     return_tracks: [
       track("return", "A-Reverb", 0x10a4ee, [device("Hybrid Reverb")]),
@@ -707,6 +711,19 @@ type Method = (obj: LiveObject, parameters: unknown[]) => unknown;
 /** Thrown by a method to make the bridge reply with an error, as Live does for invalid calls. */
 class CallError extends Error {}
 
+const fail = (message: string): never => {
+  throw new CallError(message);
+};
+
+/** A deep copy of an object and its children, as Live duplicates a track. */
+const copyObject = (original: LiveObject): LiveObject => {
+  const copy = create({ ...original.props }, {}, original.kind);
+  Object.entries(original.children).forEach(([child, ids]) => (copy.children[child] = ids.map((id) => copyObject(objects.get(id)!).id)));
+  const notes = clipNotes.get(original.id);
+  if (notes) clipNotes.set(copy.id, notes.map((note) => ({ ...note })));
+  return copy;
+};
+
 /** Transport roughly as Live does it: Play starts from the insert marker, Stop twice rewinds. */
 const songMethods: Record<string, Method> = {
   start_playing: () => {
@@ -714,6 +731,38 @@ const songMethods: Record<string, Method> = {
     update(song, "is_playing", true);
   },
   continue_playing: () => update(song, "is_playing", true),
+  // A copy of a track and everything on it, right after it.
+  duplicate_track: (_song, [index]) => {
+    const original = objects.get(song.children.tracks[Number(index)]) ?? fail(`duplicate_track: no track ${index}`);
+    // MOCK_DUPLICATE_BEFORE=1 puts the copy before the original, to check nothing else gets touched.
+    song.children.tracks.splice(Number(index) + (process.env.MOCK_DUPLICATE_BEFORE === "1" ? 0 : 1), 0, copyObject(original).id);
+    reindex();
+    notify(song, "tracks");
+  },
+  delete_track: (_song, [index]) => {
+    const removed = objects.get(song.children.tracks[Number(index)]) ?? fail(`delete_track: no track ${index}`);
+    song.children.tracks = song.children.tracks.filter((id) => id !== removed.id);
+    destroy(removed);
+    reindex();
+    notify(song, "tracks");
+  },
+  // Objects arrive as "id <n>" pairs: move_device id 12 id 34 0.
+  move_device: (_song, parameters) => {
+    const [, deviceId, , targetId, position] = parameters.map(Number);
+    const moved = objects.get(deviceId) ?? fail(`move_device: no device ${deviceId}`);
+    const target = objects.get(targetId) ?? fail(`move_device: no track ${targetId}`);
+    const from = parentOf(moved);
+    if (moved.kind !== "device" || !from?.children.devices || !target.children.devices) fail("move_device: not a device and a track");
+    if (Number(moved.props.type) === MIDI_EFFECT && !target.props.has_midi_input) fail("move_device: a MIDI effect can't go on an audio track");
+    from!.children.devices = from!.children.devices.filter((id) => id !== moved.id);
+    const devices = target.children.devices;
+    const at = Math.max(0, Math.min(Number(position) || 0, devices.length));
+    devices.splice(at, 0, moved.id);
+    reindex();
+    notify(from!, "devices");
+    if (target !== from) notify(target, "devices");
+    return at;
+  },
   stop_playing: () => {
     if (!song.props.is_playing) {
       update(song, "start_time", 0);
@@ -1002,7 +1051,19 @@ interface BandEvent {
   pitch: number;
   velocity: number;
   beat: number;
+  /** A strum on an audio guitar: the chord's pitch classes. */
+  strum?: number[];
 }
+
+/** Down, down, up, up, down: where the audio guitar strums in each 4/4 bar. */
+const STRUM_PATTERN = [0, 1, 1.5, 2.5, 3];
+
+/** An audio input on a track named Guitar strums chords: FluCoMa's chroma and onsets, as Session Input Audio sends them. */
+const isStrummer = (input: { kind: string; trackId?: number }) =>
+  input.kind === "audio" && input.trackId !== undefined && objects.get(input.trackId)?.props.name === "Guitar";
+
+/** Each strumming input's latest strum. */
+const strums = new Map<number, { tones: number[]; at: number }>();
 
 let bandQueue: BandEvent[] = [];
 let lastTick = performance.now();
@@ -1068,7 +1129,13 @@ const inputDevices = () => {
 const audioPitch = new Map<number, number | undefined>();
 const isAudioInput = (deviceId: number) => objects.get(deviceId)?.props.class_name === "MxDeviceAudioEffect";
 
-const sendNote = ({ deviceId, pitch, velocity, beat }: BandEvent) => {
+const sendNote = ({ deviceId, pitch, velocity, beat, strum }: BandEvent) => {
+  if (strum) {
+    if (!velocity) return void strums.delete(deviceId);
+    strums.set(deviceId, { tones: strum, at: beat });
+    udp.send(oscMessage("/sp/attack", [["i", deviceId], ["f", beat * TICKS_PER_BEAT]]), OSC_PORT, "127.0.0.1");
+    return;
+  }
   if (isAudioInput(deviceId)) {
     if (velocity) {
       audioPitch.set(deviceId, pitch);
@@ -1120,6 +1187,13 @@ const bandBar = (bar: number): BandEvent[] => {
   const events: BandEvent[] = [];
   for (const input of inputDevices()) {
     if (followsClip(input)) continue;
+    if (isStrummer(input)) {
+      const tones = chord.intervals.map((interval) => (chord.root + interval) % 12);
+      STRUM_PATTERN.filter((at) => at < length).forEach((at) =>
+        events.push({ deviceId: input.id, pitch: -1, velocity: 100, beat: start + at, strum: tones })
+      );
+      continue;
+    }
     for (const note of partNotes(input.role, chord, length)) {
       const beat = start + note.start;
       events.push(
@@ -1188,11 +1262,29 @@ const allNotesOff = () => {
 };
 
 // Audio inputs: a pitch reading every 10 ms, with a little vibrato, and a noise floor between notes.
+// A strumming guitar's pitch is anyone's guess; its level decays after each strum,
+// and every other reading comes with a chroma frame: the chord's pitch classes strong.
+let audioTick = 0;
 setInterval(() => {
   if (!song.props.is_playing || !bandOn) return;
   const beat = songTimeNow();
+  audioTick++;
   for (const input of inputDevices()) {
     if (input.kind !== "audio") continue;
+    if (isStrummer(input)) {
+      const strum = strums.get(input.id);
+      const amplitude = strum ? 0.3 * Math.exp(-(beat - strum.at) * 0.6) : 0.001;
+      const ticks = beat * TICKS_PER_BEAT;
+      udp.send(oscMessage("/sp/pitch", [["i", input.id], ["f", 80 + Math.random() * 1000], ["f", amplitude], ["f", ticks]]), OSC_PORT, "127.0.0.1");
+      if (audioTick % 2) continue;
+      const weights = [1, 0.85, 0.9, 0.7];
+      const chroma = Array.from({ length: 12 }, (_, pc) => {
+        const rank = strum?.tones.indexOf(pc) ?? -1;
+        return amplitude * ((rank >= 0 ? weights[rank] : 0.05) + Math.random() * 0.05);
+      });
+      udp.send(oscMessage("/sp/chroma", [["i", input.id], ["f", ticks], ...chroma.map((value) => ["f", value] as ["f", number])]), OSC_PORT, "127.0.0.1");
+      continue;
+    }
     const pitch = audioPitch.get(input.id);
     const hz = pitch === undefined ? 80 + Math.random() * 2000 : 440 * 2 ** ((pitch - 69) / 12) * (1 + 0.003 * Math.sin(beat * 20));
     const amplitude = pitch === undefined ? 0.001 : 0.2;

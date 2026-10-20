@@ -39,7 +39,11 @@ export type OscMessage =
   | { type: "onset"; deviceId: number; beat: number }
   | { type: "hello"; deviceId: number; kind: string }
   /** A Session Voice device finished recording take `take` (see voiceFile). */
-  | { type: "voice"; deviceId: number; take: number };
+  | { type: "voice"; deviceId: number; take: number }
+  /** Session Input Audio's pitch-class levels (FluCoMa's fluid.chroma~), C first. */
+  | { type: "chroma"; deviceId: number; beat: number; chroma: number[] }
+  /** Session Input Audio's spectral onset (FluCoMa's fluid.onsetslice~): a strum or a picked note. */
+  | { type: "attack"; deviceId: number; beat: number };
 
 /** Decodes the Session Input devices' OSC messages; anything else is ignored. */
 export const parseOsc = (buffer: Uint8Array): OscMessage | undefined => {
@@ -65,6 +69,16 @@ export const parseOsc = (buffer: Uint8Array): OscMessage | undefined => {
     const [deviceId, ticks] = args.map(Number);
     if ([deviceId, ticks].some((n) => !Number.isFinite(n))) return undefined;
     return { type: "onset", deviceId, beat: ticks / TICKS_PER_BEAT };
+  }
+  if (packet.address === "/sp/chroma" && args.length >= 14) {
+    const [deviceId, ticks, ...chroma] = args.slice(0, 14).map(Number);
+    if (![deviceId, ticks, ...chroma].every(Number.isFinite)) return undefined;
+    return { type: "chroma", deviceId, beat: ticks / TICKS_PER_BEAT, chroma: chroma.map((value) => Math.max(value, 0)) };
+  }
+  if (packet.address === "/sp/attack" && args.length >= 2) {
+    const [deviceId, ticks] = args.map(Number);
+    if (![deviceId, ticks].every(Number.isFinite)) return undefined;
+    return { type: "attack", deviceId, beat: ticks / TICKS_PER_BEAT };
   }
   if (packet.address === "/sp/voice" && args.length >= 2) {
     const [deviceId, take] = args.map(Number);

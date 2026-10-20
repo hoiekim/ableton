@@ -22,6 +22,12 @@ export interface ParamValue {
   label?: string;
 }
 
+/**
+ * The track the musician keeps spare Session devices on ("Session Devices"):
+ * the web page's Listen switch copies one from it onto a track that has none.
+ */
+export const isDeviceStash = (trackName: string) => /^session devices\b/i.test(trackName.trim());
+
 /** Present on Session Player and Session Input devices, recognized by their parameter names. */
 export interface SessionDeviceInfo {
   kind: "player" | "input" | "voice";
@@ -305,6 +311,8 @@ export interface SessionState {
   transcriber: TranscriberState;
   /** The last bars the inputs played, oldest first, ending with the bar in progress. */
   timeline: TimelineBar[];
+  /** Something to tell the musician, e.g. that an input was added to a track (Unix ms). */
+  notice?: { text: string; tone: "info" | "error"; at: number };
 }
 
 export const initialSessionState: SessionState = {

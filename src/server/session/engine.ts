@@ -4,20 +4,23 @@ import {
   Instrument,
   InputState,
   MAX_DIRECTION_LENGTH,
+  SessionState,
   SpeechState,
   TimelineBar,
+  isDeviceStash,
   TrackState,
   inputRoles,
   instruments,
 } from "common";
 import { LiveStore } from "../store";
 import { BandAnalysis, BarRecord, InputBar, analyzeBand } from "./analyze";
-import { AudioNotes } from "./audio";
+import { AudioNotes, toDb } from "./audio";
+import { AudioMode, ChromaNotes } from "./chroma";
 import { ClipAnchor, InputClip, anchorClip, clipNotesInBar } from "./clips";
 import { beatsPerBar, estimateSongTime, msPerBeat } from "./clock";
 import { loadConfig } from "./config";
 import { profileInstrument } from "./instrument";
-import { InputInfo, Recorder, parseOsc } from "./listen";
+import { InputInfo, OscMessage, Recorder, parseOsc } from "./listen";
 import { clamp, compactNote, liveNoteName } from "./music";
 import { LiveOps } from "./ops";
 import { Player, PlayerSettings, Timing } from "./player";
@@ -106,6 +109,10 @@ export class SessionEngine {
   private transcriber: Transcriber;
   /** Note detection for each audio input, from its pitch readings. */
   private audio = new Map<number, AudioNotes>();
+  /** Chord detection for each audio input, from FluCoMa's chroma and onsets. */
+  private chroma = new Map<number, ChromaNotes>();
+  /** How each audio input is heard right now: single notes, chords or hits. */
+  private audioModes = new Map<number, AudioMode>();
   /** The clip playing on each input's track (by track id), tied to the bars counted here. */
   private clips = new Map<number, { clip: InputClip; anchor: ClipAnchor }>();
   private history: BarRecord[] = [];
@@ -124,6 +131,9 @@ export class SessionEngine {
   private staleInstruments = new Set<number>();
   /** The musician's style direction, from the web page. */
   private direction = "";
+  private notice?: SessionState["notice"];
+  /** Tracks an input is being added to, so a double click adds one. */
+  private adding = new Set<number>();
   /** The clip slot each player's last audition went into, to reuse it. */
   private auditionSlots = new Map<number, number>();
 
@@ -159,7 +169,9 @@ export class SessionEngine {
     const ops = this.ops();
     const track = this.store.state.tracks.find((t) => t.id === trackId);
     if (!ops || !track) return;
-    for (const device of track.devices.filter(isListener)) {
+    const listeners = track.devices.filter(isListener);
+    if (!listeners.length && on) return void this.addInput(track);
+    for (const device of listeners) {
       const param = device.session!.kind === "voice" ? "SPV On" : "SPI On";
       ops.setSessionParam(device.id, param, on ? 1 : 0).catch((error) => {
         console.error(`[session] Couldn't turn ${device.name} on ${track.name} ${on ? "on" : "off"}:`, error);
@@ -190,6 +202,38 @@ export class SessionEngine {
     return result;
   };
 
+  /**
+   * Puts the right Session Input first on a track that has none, copied from
+   * the Session Devices track: Session Input Audio on an audio track, Session
+   * Input on a MIDI track.
+   */
+  private addInput = async (track: TrackState) => {
+    const ops = this.ops();
+    if (!ops || this.adding.has(track.id) || (track.type !== "audio" && track.type !== "midi")) return;
+    const name = track.type === "audio" ? "Session Input Audio" : "Session Input";
+    const wanted = (device: DeviceState) =>
+      device.session?.kind === "input" && device.type === (track.type === "audio" ? "audio_effect" : "midi_effect");
+    const stash = this.store.state.tracks.find((t) => isDeviceStash(t.name) && t.devices.some(wanted));
+    if (!stash) {
+      return this.tell(`To add ${name} from here, keep a copy on a track named "Session Devices" (see the README), or drop it first on ${track.name} in Live.`, "error");
+    }
+    this.adding.add(track.id);
+    try {
+      await ops.copyDevice(stash.id, stash.devices.findIndex(wanted), track.id);
+      this.tell(`Added ${name} as ${track.name}'s first device: the players hear it now.`, "info");
+    } catch (error) {
+      this.tell(`Couldn't add ${name} to ${track.name}: ${error instanceof Error ? error.message : String(error)}`, "error");
+    } finally {
+      this.adding.delete(track.id);
+    }
+  };
+
+  private tell = (text: string, tone: "info" | "error") => {
+    (tone === "error" ? console.error : console.info)(`[session] ${text}`);
+    this.notice = { text, tone, at: Date.now() };
+    this.publish();
+  };
+
   /** Sets the style direction; it's used from the next decision on. */
   setDirection = (text: string) => {
     this.direction = text.trim().slice(0, MAX_DIRECTION_LENGTH);
@@ -216,9 +260,66 @@ export class SessionEngine {
       this.recorder.push({ ...message, receivedAt: performance.now() });
       return;
     }
-    const notes = this.audioNotes(message.deviceId);
-    if (message.type === "onset") notes.onset(message.beat);
-    else notes.frame(message.hz, message.amplitude, message.beat, this.inputs.get(message.deviceId)?.threshold ?? -40);
+    this.onAudio(message);
+  };
+
+  /**
+   * An audio input's readings: fzero~'s pitch and level (every 10 ms) and its
+   * onsets, and with FluCoMa its chroma and spectral onsets. They become notes
+   * the way the input is heard right now (see modeFor).
+   */
+  private onAudio = (message: Extract<OscMessage, { type: "pitch" | "onset" | "chroma" | "attack" }>) => {
+    const { deviceId, beat } = message;
+    const threshold = this.inputs.get(deviceId)?.threshold ?? -40;
+    const notes = this.audioNotes(deviceId);
+    const chords = this.chromaNotes(deviceId);
+    if (message.type === "chroma") chords.frame(message.chroma, beat);
+    const mode = this.switchMode(deviceId, beat);
+    const strike = () => (mode === "notes" ? notes.onset(beat) : mode === "chords" ? chords.strum(beat) : chords.hit(beat));
+    if (message.type === "pitch") {
+      notes.frame(message.hz, message.amplitude, beat, threshold);
+      chords.level(toDb(message.amplitude), threshold, beat);
+    }
+    if (message.type === "attack") strike();
+    // fzero~'s onsets follow the level; FluCoMa's spectral ones, when it's there, are better.
+    if (message.type === "onset" && !chords.isActive()) strike();
+  };
+
+  /**
+   * Bass and melody are single notes and drums are hits; chords need FluCoMa's
+   * chroma. On Auto, an input plays chords when the chroma keeps showing 3 or
+   * more pitch classes.
+   */
+  private modeFor = (deviceId: number): AudioMode => {
+    const role = this.inputs.get(deviceId)?.role;
+    const chords = this.chroma.get(deviceId);
+    if (role === "drums") return "hits";
+    if (role === "bass" || role === "melody" || !chords?.isActive()) return "notes";
+    return role === "chords" || chords.isPolyphonic() ? "chords" : "notes";
+  };
+
+  /** Moves an input to its current mode, ending what the old mode was holding. */
+  private switchMode = (deviceId: number, beat: number) => {
+    const previous = this.audioModes.get(deviceId) ?? "notes";
+    const mode = this.modeFor(deviceId);
+    if (mode !== previous) {
+      // Released while the old mode still lets its notes through.
+      if (previous === "notes") this.audioNotes(deviceId).release(beat);
+      else this.chromaNotes(deviceId).release(beat);
+      this.audioModes.set(deviceId, mode);
+    }
+    return mode;
+  };
+
+  private chromaNotes = (deviceId: number) => {
+    let notes = this.chroma.get(deviceId);
+    if (!notes) {
+      notes = new ChromaNotes((event) => {
+        if ((this.audioModes.get(deviceId) ?? "notes") !== "notes") this.recorder.push({ deviceId, ...event, receivedAt: performance.now() });
+      });
+      this.chroma.set(deviceId, notes);
+    }
+    return notes;
   };
 
   /** A Session Voice device recorded a phrase: transcribe it and pass it on to the players. */
@@ -245,7 +346,9 @@ export class SessionEngine {
   private audioNotes = (deviceId: number) => {
     let notes = this.audio.get(deviceId);
     if (!notes) {
-      notes = new AudioNotes((event) => this.recorder.push({ deviceId, ...event, receivedAt: performance.now() }));
+      notes = new AudioNotes((event) => {
+        if ((this.audioModes.get(deviceId) ?? "notes") === "notes") this.recorder.push({ deviceId, ...event, receivedAt: performance.now() });
+      });
       this.audio.set(deviceId, notes);
     }
     return notes;
@@ -257,6 +360,8 @@ export class SessionEngine {
     this.inputs.clear();
     this.voices.clear();
     for (const track of this.store.state.tracks) {
+      // The spare devices waiting on the Session Devices track hear nothing.
+      if (isDeviceStash(track.name)) continue;
       const playerDevice = track.devices.find((device) => device.session?.kind === "player");
       if (playerDevice) {
         seenPlayers.add(playerDevice.id);
@@ -437,6 +542,7 @@ export class SessionEngine {
     }
     const beat = estimateSongTime(transport, this.store.songTimeAt);
     this.audio.forEach((notes) => notes.idle(beat));
+    this.chroma.forEach((notes) => notes.idle(beat));
     this.players.forEach((player) => player.tick());
     if (performance.now() - this.lastPublish > STATUS_REFRESH_MS && (this.inputs.size || this.players.size || this.voices.size)) this.publish();
   };
@@ -515,6 +621,7 @@ export class SessionEngine {
         speech: this.speech,
         transcriber: this.transcriber.state,
         timeline: this.timeline(),
+        notice: this.notice,
       });
     }, 0);
   };

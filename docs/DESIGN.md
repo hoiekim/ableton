@@ -50,7 +50,7 @@ its long name, so either one matches.
 |---|---|---|---|
 | Session Player | MIDI effect, before the player's instrument | `SP Instrument` (Drums/Bass/Keys/Guitar/Auto; Auto is last so older devices keep their setting), `SP Active`, `SP Lookahead` (1–4 bars), `SP Length` (1/2/4-bar clips), `SP Join` (bars to listen first), `SP Energy` (Auto or 1–10) | nothing; the server reads and observes the parameters through the Live API |
 | Session Input | MIDI effect, first on a source MIDI track | `SPI Role` (Auto/Bass/Chords/Melody/Drums), `SPI On` | every note-on/off |
-| Session Input Audio | audio effect, first on a source audio track | `SPI Role`, `SPI On`, `SPI Threshold` (dB) | `fzero~` readings every 10 ms, and onsets |
+| Session Input Audio | audio effect, first on a source audio track | `SPI Role`, `SPI On`, `SPI Threshold` (dB) | `fzero~` readings every 10 ms, and onsets; with FluCoMa, chroma every 23 ms and spectral onsets |
 | Session Voice | audio effect, first on a vocal track | `SPV On`, `SPV Threshold` (dB, default −35) | each phrase's take number, once its file is written |
 
 ### OSC messages (UDP 127.0.0.1:9101)
@@ -63,7 +63,9 @@ its track.
 |---|---|---|
 | `/sp/note` | deviceId, pitch, velocity (0 = off), ticks | Session Input |
 | `/sp/pitch` | deviceId, hz, amplitude, ticks | Session Input Audio |
-| `/sp/onset` | deviceId, ticks | Session Input Audio |
+| `/sp/onset` | deviceId, ticks | Session Input Audio (level-based, from `fzero~`) |
+| `/sp/chroma` | deviceId, ticks, 12 pitch-class levels (C first, raw) | Session Input Audio, with FluCoMa |
+| `/sp/attack` | deviceId, ticks | Session Input Audio, with FluCoMa (spectral onset) |
 | `/sp/voice` | deviceId, take | Session Voice, when take's file is closed |
 | `/sp/hello` | deviceId, `midi`, `audio` or `voice` | every device, every 2 s |
 
@@ -74,6 +76,7 @@ its track.
 | `engine.ts` | Owns everything: finds Session devices in the set, receives OSC, counts bars while Live plays, drives one Player per Session Player device, publishes state to the web page. |
 | `listen.ts` | Decodes OSC (`osc-min`) and cuts note events into bars; notes still sounding carry into the next bar as held notes. |
 | `audio.ts` | Turns pitch readings into notes: a pitch must hold for 2 readings to start, 3 to change; a level threshold with 4 dB hysteresis ends notes; onsets re-attack. |
+| `chroma.ts` | Turns chroma frames and spectral onsets into chord events (or hits), for strummed audio. |
 | `analyze.ts` | Per bar: each part's role, onsets on a 16-step grid (rounded to the nearest step), register, polyphony, velocity; the chord (Tonal's `Chord.detect` on a duration-weighted pitch-class profile, preferring the bass note as root); the key (Krumhansl–Schmuckler over recent bars); energy; and the chord of upcoming bars. |
 | `state.ts` | The text the decision model reads. Every number is worked out in code; the model only reads. |
 | `patterns/` | The pattern library and its renderers. |
@@ -249,6 +252,60 @@ engine, and used from the next decision on:
   that genre's patterns strongly enough to beat sticking with the current one,
   and mood words move energy by ±2.
 
+## Adding inputs from the web page
+
+Live's API can't create a Max for Live device (Live 12.3's `insert_device`
+takes native devices only), but Live 11 can duplicate a track
+(`Song.duplicate_track`) and move a device to another track and position
+(`Song.move_device`). So the musician keeps one copy of each Session device on
+a track named Session Devices, and switching Listen on for a track without an
+input ([engine.ts](../src/server/session/engine.ts) `addInput`,
+[live.ts](../src/server/live.ts) `copyDevice`):
+
+1. duplicates Session Devices (Live puts the copy right after it),
+2. moves the copy's Session Input Audio (audio track) or Session Input (MIDI
+   track) to position 0 of the track, passing objects as `id <n>` pairs,
+3. switches it on, and deletes the duplicate.
+
+Before moving or deleting anything, it checks that the track after Session
+Devices is new, named the same, and holds the same devices. Anything else is
+one of the musician's tracks, so it stops and says a stray copy may need
+deleting by hand. Duplicating, moving and deleting get 10 s instead of the
+bridge's 2 s, since Live loads Max devices when duplicating. The server doesn't
+load the short-lived duplicate (and re-reads the tracks afterwards, so a stray
+copy shows), and after watching a
+Session device's parameters it reads them once more, so turning the moved
+device on right away isn't missed. Devices on Session Devices are spares: they
+are never inputs. Without the track, the page says what the track needs. The
+web page learns the outcome from `SessionState.notice`.
+
+## Chords and rhythm from audio
+
+`fzero~` follows one pitch, so strummed chords came through as a wobbling
+single note and the strumming rhythm was lost. With the free FluCoMa package,
+Session Input Audio also sends `fluid.chroma~` frames (12 raw pitch-class
+levels, 93 ms windows every 23 ms, 60 Hz–2 kHz) and `fluid.onsetslice~` onsets
+(metric 9, about 6 ms hops). Without FluCoMa those objects don't load and
+nothing changes. [chroma.ts](../src/server/session/chroma.ts) turns them into
+notes, so everything downstream works as for MIDI:
+
+- **A strum** reads the strongest pitch classes (at least half the strongest,
+  at most 4) from the two frames after the onset, since the window trails it,
+  and plays them stamped at the onset: the strongest in C3–B3 (usually the
+  root, which the chord detection then takes as the bass), the rest an octave
+  up. They're held until the next strum, until the level (from `fzero~`'s
+  readings) drops 4 dB under the Threshold, or until chroma stops.
+- **A chord change without a strum** (legato, or a missed onset) counts once
+  the new set of pitch classes holds for 6 frames (about 140 ms).
+- **Mode by role:** Chords strums; Bass and Melody stay single notes (spectral
+  onsets re-attack them, better than the level did); Drums turns onsets into
+  short snare notes for the rhythm; Auto strums when 3 or more pitch classes
+  are strong in 60% of the last second's loud frames. Switching modes ends what
+  the old mode was holding.
+
+The rhythm grid, density and energy then see each strum as onsets; a strummed
+chord counts each of its notes, as a played MIDI chord does.
+
 ## Voice
 
 Session Voice lets the singer talk to the players. Everything said or sung goes
@@ -363,7 +420,7 @@ stopped would start the transport.
 
 ## Verification
 
-- **Unit tests** (`bun test`, 193 tests):
+- **Unit tests** (`bun test`, 202 tests):
   - chord, key and loop detection
   - every pattern rendering valid notes on the chord
   - OSC decoding and bar cutting
@@ -374,6 +431,7 @@ stopped would start the transport.
   - speech in the scheduler: joining early (or waiting) on what Jev answers, asking again without an answer, one cued fill per phrase
   - decision details: what was sent, the local ranking, the notes written, and pending bars
   - reusing answers: the rule for every row of its table, the fingerprint staying put over a loop and changing when a part does, and the scheduler asking at phrase edges, reusing mid-phrase at the last moment, holding through silence and asking again after speech
+  - chords from chroma: strong pitch classes, a strum read after its onset, legato changes, ending on quiet, chords told from single notes, hits; the chroma and attack messages
 - **End to end against the mock bridge** (`bun run mock`):
   - The mock includes clips, launch-quantized playback, device parameters, and a scripted band on Bass, Keys and Vocals. The Vocals part arrives as pitch readings.
   - At 80, 120 and 160 BPM: no missed bars, clips in place about 150 ms or more before their bar, and the guitar's chords matched the band from bar 6 on.
@@ -405,7 +463,18 @@ stopped would start the transport.
   jam-check still had no wrong or missing bars at 80, 120 and 160 BPM. The mock
   had stamped a stopped band's note-offs with a stale position, so notes looked
   held for 8 bars; it now uses the current position.
-- **Not yet verified in Ableton Live itself**, including the Session Voice
+- **Inputs and strums, against the mock:** switching Listen on for the audio
+  Guitar put Session Input Audio first on it, switched on, and removed the
+  duplicate; off and on again switched the same device. A MIDI track got
+  Session Input before its Drum Rack; without Session Devices the page said
+  what was needed. The mock guitar's chroma and onsets (strums on 1, 2, 2&,
+  3&, 4 over Am F C G) came through as strums on exactly those beats, the
+  chords read Am, F, C, G with the loop "sure", Auto chose chords on its own,
+  and the decision model read "Chords (Guitar): busy, eighth notes". No mock
+  warnings; jam-check unchanged.
+- **Not yet verified in Ableton Live itself**, including `move_device` with
+  `id` pairs through the bridge, the FluCoMa objects' attribute names in the
+  Session Input Audio patch, and the Session Voice
   patch: its level gate, `sfrecord~` file handling and `sprintf` path have only
   been checked for valid connections, not run in Max.
 
@@ -414,7 +483,7 @@ stopped would start the transport.
 - Every clip write adds steps to Live's undo history (fewer when clips are kept).
 - Session View only. The player needs its own track: launching a scene also launches the player's slot in that row.
 - Until a progression has been heard once, the next chord is a guess (the last chord held), so bars 2–5 can clash.
-- Audio input hears one note at a time and may make octave errors.
+- Without FluCoMa, audio input hears one note at a time and may make octave errors. With it, chord tones come from chroma, so inversions and the exact voicing aren't known, and Auto can take a single note with strong harmonics for a chord: set Role to Chords or Melody to be sure.
 - A Drum Rack inside an Instrument Rack can't report which note plays which sound in Live 11; the standard layout is assumed.
 - A synth's sound is judged from names and its amp envelope only; a preset with an uninformative name and an unusual envelope may be described vaguely.
 - The bridge (LiveAPI.amxd) logs every call to Max's console, and asking for `value_items` on non-enum parameters logs errors there; both are harmless.

@@ -1,10 +1,30 @@
 import React, { useEffect, useState } from "react";
+import { SessionState } from "common";
 import { Dashboard } from "./Dashboard";
 import { Patterns } from "./Patterns";
 import { SessionPanel } from "./SessionPanel";
 import { Connection, Transport } from "./Transport";
-import { TrackRow } from "./TrackRow";
+import { TrackRow, canAddInput } from "./TrackRow";
 import { useLiveSocket } from "./useLiveSocket";
+
+/** What the server last said about a change the musician asked for, for a few seconds. */
+const SessionNotice = ({ notice }: { notice?: SessionState["notice"] }) => {
+  const [, setNow] = useState(0);
+  const age = notice ? Date.now() - notice.at : Infinity;
+  useEffect(() => {
+    if (age >= NOTICE_MS) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), NOTICE_MS - age);
+    return () => window.clearTimeout(timer);
+  }, [age]);
+  if (!notice || age >= NOTICE_MS) return null;
+  return (
+    <p className={`sessionNotice ${notice.tone}`} role="status">
+      {notice.text}
+    </p>
+  );
+};
+
+const NOTICE_MS = 10000;
 
 type View = "tracks" | "dashboard" | "patterns";
 
@@ -68,6 +88,7 @@ export const App = () => {
           </a>
         </nav>
       )}
+      {status === "connected" && <SessionNotice notice={state.session.notice} />}
       {status === "connected" && view === "dashboard" ? (
         <Dashboard session={state.session} transport={transport} onDirection={sendDirection} />
       ) : status === "connected" && view === "patterns" ? (
@@ -77,7 +98,7 @@ export const App = () => {
           {status === "connected" && <SessionPanel session={state.session} onDirection={sendDirection} />}
           <main className="tracks">
             {tracks.map((track) => (
-              <TrackRow key={track.id} track={track} onListen={sendListen} />
+              <TrackRow key={track.id} track={track} canAdd={canAddInput(tracks, track.type)} onListen={sendListen} />
             ))}
             {notice && <p className="notice">{notice}</p>}
           </main>

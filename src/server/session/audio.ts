@@ -21,9 +21,9 @@ const SILENT_MS = 200;
 const LOWEST = 24;
 const HIGHEST = 108;
 
-const toDb = (amplitude: number) => (amplitude > 0 ? 20 * Math.log10(amplitude) : -120);
+export const toDb = (amplitude: number) => (amplitude > 0 ? 20 * Math.log10(amplitude) : -120);
 
-const toVelocity = (db: number) => clamp(Math.round(((db + 60) / 60) * 127), 1, 127);
+export const toVelocity = (db: number) => clamp(Math.round(((db + 60) / 60) * 127), 1, 127);
 
 const toPitch = (hz: number) => {
   if (!(hz > 0)) return undefined;
@@ -84,6 +84,12 @@ export class AudioNotes {
     const { pitch } = this.sounding;
     this.end(beat);
     this.start(pitch, this.lastVelocity, beat, now);
+  };
+
+  /** Ends the held note now, e.g. when the input switches to chords. */
+  release = (beat: number) => {
+    this.candidate = undefined;
+    this.end(beat);
   };
 
   /** Ends the held note when readings stop coming. */

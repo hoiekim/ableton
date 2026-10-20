@@ -29,9 +29,9 @@ decision as a MIDI clip that Live starts on the next bar.
    it writes into its last 4 clip slots, and launching a scene also launches
    that row's slot.
 2. Put **Session Input** (`devices/Session Input.amxd`) first on each MIDI track
-   it should hear, or **Session Input Audio** first on audio tracks (one note at
-   a time: bass, vocals, lead). First in the chain means the player hears the
-   part before any effects. Set each input's Role if Auto guesses wrong.
+   it should hear, or **Session Input Audio** first on audio tracks. First in
+   the chain means the player hears the part before any effects. Set each
+   input's Role if Auto guesses wrong. Or let the web page add them (below).
 3. Optionally, put **Session Voice** (`devices/Session Voice.amxd`) first on a
    vocal track so the players hear what's said or sung there (see
    [Talking to the players](#talking-to-the-players)).
@@ -65,8 +65,31 @@ launch it yourself, with the player off, or it takes over once it joins.
 
 Each track row on the web page has a **Listen** switch: it turns that track's
 Session Input and Session Voice on or off (their On switch in Live), so you
-can take a part out of what the players hear without touching Live. Tracks
-without either device show it greyed out.
+can take a part out of what the players hear without touching Live.
+
+On a track with no input yet, switching Listen on adds one: Session Input
+Audio first on an audio track, Session Input first on a MIDI track. Live
+can't create a Max for Live device by API, so set this up once: make a MIDI
+track named **Session Devices** and drop Session Input, Session Input Audio and
+Session Voice on it (switched off). The server copies from it: it duplicates
+that track, moves the copy's device to your track and deletes the duplicate,
+which shows as a few steps in Live's undo history. Without a Session Devices
+track the switch says which device the track needs.
+
+### Chords and rhythm from audio
+
+Session Input Audio follows one note at a time out of the box, which suits
+bass, vocals and lead lines. To hear **strummed chords** and the strumming
+**rhythm** from a guitar (or any chordal audio), install the free
+[FluCoMa](https://www.flucoma.org) package once: in Live, open any Max for Live
+device in the Max editor, choose File > Show Package Manager and install
+"FluCoMa". Session Input Audio then also sends how strong each of the 12 pitch
+classes is (`fluid.chroma~`) and every spectral onset (`fluid.onsetslice~`).
+Each strum becomes a chord the players can read: the chord, the key, the loop,
+and where in the bar the strums fall, all shown in the Dashboard's lane for the
+track. The input's Role picks how it's heard: Chords for strumming, Bass or
+Melody for single notes, Drums for hits only, and Auto chooses chords when 3 or
+more pitch classes keep sounding. Without FluCoMa the device works as before.
 
 How it decides: the server sums up the band as text (chords, predicted next
 chord, key, rhythm, energy, where the phrase is) and asks a decision model to
@@ -188,7 +211,9 @@ curl 'http://127.0.0.1:9001/mock?action=drop'
 stops listening for a while the way quitting Live would.
 
 The mock's Set has two Session Players (AI Drums and AI Guitar), Session
-Inputs on Bass, Keys and Vocals, and a Session Voice on Vocals. While it plays, a scripted band sends those
+Inputs on Bass, Keys and Vocals, a Session Voice on Vocals, a strummed Guitar
+audio track with no input yet (switch its Listen on to add one; it then sends
+chroma and onsets as if FluCoMa were installed), and a Session Devices track. While it plays, a scripted band sends those
 inputs' notes to the server (Vocals as pitch readings, like the audio device),
 and each clip the players write is logged per bar, so you can watch them jam:
 

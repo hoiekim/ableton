@@ -9,6 +9,7 @@ import {
   TransportCommand,
   TransportState,
   initialTransport,
+  isDeviceStash,
 } from "common";
 import { ClipNoteData, InputClip } from "./session/clips";
 import { estimateSongTime, msPerBeat } from "./session/clock";
@@ -75,6 +76,9 @@ const trackLists: { child: string; type?: TrackType; props: string[] }[] = [
   { child: "return_tracks", type: "return", props: ["name", "color", "mute", "solo"] },
   { child: "master_track", type: "master", props: ["name", "color"] },
 ];
+
+/** Calls that make Live load devices (duplicating a track of Max for Live devices) get longer than the bridge's 2 s. */
+const SLOW_CALL_MS = 10000;
 
 const deviceProps = ["name", "type", "class_name", "class_display_name", "is_active"];
 
@@ -344,13 +348,17 @@ class LiveSession {
     for (const { raw, type } of found) {
       const id = Number(raw.id);
       if (this.tracks.has(id)) continue;
+      // The Session Devices copy the Listen switch makes is deleted again right away.
+      if (this.copyingDevice && isDeviceStash(String(raw.name ?? ""))) continue;
       try {
         const entry = await this.loadTrack(raw, type);
         if (this.disposed) return;
         this.tracks.set(id, entry);
         this.publish();
       } catch (error) {
-        console.error(`[live] Failed to load track ${id}:`, error);
+        // A track deleted while it loaded isn't a problem.
+        if (!this.order.includes(id)) continue;
+        console.error(`[live] Failed to load track ${id}:`, error instanceof Error ? error.message : error);
       }
     }
   };
@@ -548,6 +556,8 @@ class LiveSession {
 
   /** Parameter ids of Session devices, by device and parameter name, for changing them. */
   private sessionParamIds = new Map<number, Map<string, number>>();
+  /** A Session Devices copy is being made and removed by copyDevice; it isn't loaded meanwhile. */
+  private copyingDevice = false;
 
   /** Reads and observes the parameters of a Session Player or Session Input device. */
   private loadSessionParams = async (state: DeviceState): Promise<Unsubscribe[]> => {
@@ -573,14 +583,15 @@ class LiveSession {
     };
     state.session = session;
     this.sessionParamIds.set(state.id, new Map(params.map((param) => [param.name, param.id])));
-    return Promise.all(
-      params.map((param) =>
-        this.watch(param.id, "value", (value) => {
-          const number = toNumber(value, "value");
-          if (Number.isFinite(number)) session.params[param.name] = toParamValue(number, param.items);
-        })
-      )
-    );
+    const apply = (param: (typeof params)[number], value: unknown) => {
+      const number = Number(value);
+      if (Number.isFinite(number)) session.params[param.name] = toParamValue(number, param.items);
+    };
+    const unsubscribes = await Promise.all(params.map((param) => this.watch(param.id, "value", (value) => apply(param, value))));
+    // A change between the first read and the observers starting would be
+    // missed (the Listen switch turns a device on right after moving it): read once more.
+    await Promise.all(params.map(async (param) => apply(param, await this.live.get(`id ${param.id}`, "value", param.id).catch(() => undefined))));
+    return unsubscribes;
   };
 
   /** Clip operations for the Session Player, over the same connection. */
@@ -629,6 +640,51 @@ class LiveSession {
     },
     stopTrack: async (trackId) => {
       await this.live.call(`id ${trackId}`, { method: "stop_all_clips", parameters: [] }, trackId);
+    },
+    copyDevice: async (fromTrackId, deviceIndex, toTrackId) => {
+      const tracks = () => this.children("live_set", "tracks", ["name"]);
+      const nameOf = (raw?: RawChild) => (raw ? String(raw.name ?? "") : "");
+      const before = await tracks();
+      const index = before.findIndex((raw) => Number(raw.id) === fromTrackId);
+      if (index < 0) throw new Error("the Session Devices track isn't in the set any more");
+      const stashName = nameOf(before[index]);
+      const stashDevices = (await this.children(`id ${fromTrackId}`, "devices", ["name"], fromTrackId)).map(nameOf);
+      const known = new Set(before.map((raw) => Number(raw.id)));
+      this.copyingDevice = true;
+      try {
+        // Duplicating a track of Max for Live devices can take Live a while.
+        await this.live.call("live_set", { method: "duplicate_track", parameters: [index] }, undefined, SLOW_CALL_MS);
+        const candidate = (await tracks())[index + 1];
+        const copyId = Number(candidate?.id);
+        // Only a new track named like Session Devices is its copy. Anything
+        // else is one of the musician's tracks: leave it alone.
+        if (!candidate || known.has(copyId) || nameOf(candidate) !== stashName) {
+          throw new Error(
+            `found "${nameOf(candidate) || "nothing"}" where the copy of ${stashName} should be, so nothing was changed. ` +
+              `If a copy of ${stashName} was left in the set, delete it.`
+          );
+        }
+        try {
+          const devices = await this.children(`id ${copyId}`, "devices", ["name"], copyId);
+          if (devices.map(nameOf).join("|") !== stashDevices.join("|")) throw new Error(`the copy of ${stashName} doesn't match it, so nothing was moved`);
+          // Object arguments go to Live as "id <n>" pairs.
+          const parameters = ["id", Number(devices[deviceIndex].id), "id", toTrackId, 0];
+          await this.live.call("live_set", { method: "move_device", parameters }, undefined, SLOW_CALL_MS);
+          const [moved] = await this.children(`id ${toTrackId}`, "devices", ["name"], toTrackId);
+          const movedId = Number(moved?.id);
+          const params = await this.children(`id ${movedId}`, "parameters", ["name"], movedId);
+          const on = params.find((param) => /^SP[IV] On$/.test(nameOf(param)));
+          if (on) await this.live.set(`id ${on.id}`, "value", 1, Number(on.id));
+          return movedId;
+        } finally {
+          const at = (await tracks()).findIndex((raw) => Number(raw.id) === copyId);
+          if (at >= 0) await this.live.call("live_set", { method: "delete_track", parameters: [at] }, undefined, SLOW_CALL_MS);
+        }
+      } finally {
+        this.copyingDevice = false;
+        // A copy left behind wasn't loaded while copying: show it.
+        void this.syncTracks();
+      }
     },
     setSessionParam: async (deviceId, name, value) => {
       const paramId = this.sessionParamIds.get(deviceId)?.get(name);

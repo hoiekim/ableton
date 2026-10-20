@@ -77,6 +77,7 @@ class FakeLive implements LiveOps {
   };
   instrument = async () => undefined;
   setSessionParam = async () => {};
+  copyDevice = async () => 0;
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));

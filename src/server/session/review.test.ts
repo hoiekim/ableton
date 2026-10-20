@@ -261,6 +261,7 @@ class FakeOps implements LiveOps {
   };
   stopTrack = async () => {};
   setSessionParam = async () => {};
+  copyDevice = async () => 0;
   instrument = async () => undefined;
 }
 

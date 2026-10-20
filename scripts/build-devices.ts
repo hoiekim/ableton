@@ -262,7 +262,9 @@ const sessionInputAudio = () => {
     { annotation: "Quieter sound than this doesn't count as a note.", showname: 0 }
   );
   p.comment("Threshold", [124, 66, 56, 18]);
-  p.comment("One note at a time. Put first on the track.", [8, 80, 180, 30], { textcolor: [0.6, 0.6, 0.63, 1] });
+  p.comment("Put first on the track. Chords and strums need the free FluCoMa package (Max Package Manager).", [8, 80, 190, 42], {
+    textcolor: [0.6, 0.6, 0.63, 1],
+  });
 
   // Pitch tracking on the summed input. The server turns these readings into
   // notes, so the note logic can be tested and tuned without Max.
@@ -308,12 +310,54 @@ const sessionInputAudio = () => {
   p.connect(onsetTransport, 7, onsetPrefix, 0);
   p.connect(onsetPrefix, 0, udp, 0);
 
+  // With FluCoMa (a free Max package), chords and rhythm too. Without it these
+  // objects don't load and the device works as above, one note at a time.
+  // Chroma: how strong each of the 12 pitch classes is, raw (the server gates
+  // and normalizes), from 93 ms windows every 23 ms: "/sp/chroma <id> <ticks> c0…c11".
+  const chroma = p.object(
+    "fluid.chroma~ @maxnumchroma 12 @numchroma 12 @normalize 0 @minfreq 60 @maxfreq 2000 @maxfftsize 8192 @fftsettings 4096 1024 8192",
+    1,
+    ["list"]
+  );
+  const chromaGate = p.object("gate 1 1", 2, [""]);
+  const chromaOrder = p.object("t b l", 1, ["bang", ""]);
+  const chromaTransport = p.object("transport", 2, ["int", "int", "float", "float", "float", "", "int", "float", ""]);
+  const chromaJoin = p.object("zl join", 2, ["", ""]);
+  const chromaPrefix = p.object("prepend /sp/chroma 0", 2, [""]);
+  p.connect(half, 0, chroma, 0);
+  p.connect(chroma, 0, chromaGate, 1);
+  p.connect(on, 0, chromaGate, 0);
+  p.connect(chromaGate, 0, chromaOrder, 0);
+  // The frame waits in zl join's right inlet; the song position, sent next, puts it out behind itself.
+  p.connect(chromaOrder, 1, chromaJoin, 1);
+  p.connect(chromaOrder, 0, chromaTransport, 0);
+  p.connect(chromaTransport, 7, chromaJoin, 0);
+  p.connect(chromaJoin, 0, chromaPrefix, 0);
+  p.connect(chromaPrefix, 0, udp, 0);
+
+  // Spectral onsets, which catch strums and picked notes better than the level
+  // does: an impulse per attack, turned into "/sp/attack <id> <ticks>".
+  const attacks = p.object("fluid.onsetslice~ @metric 9 @threshold 0.25 @minslicelength 5 @filtersize 5 @fftsettings 1024 256 1024", 1, ["signal"]);
+  const attackEdge = p.object("edge~", 1, ["bang", "bang"]);
+  const attackGate = p.object("gate 1 1", 2, [""]);
+  const attackTransport = p.object("transport", 2, ["int", "int", "float", "float", "float", "", "int", "float", ""]);
+  const attackPrefix = p.object("prepend /sp/attack 0", 2, [""]);
+  p.connect(half, 0, attacks, 0);
+  p.connect(attacks, 0, attackEdge, 0);
+  p.connect(attackEdge, 0, attackGate, 1);
+  p.connect(on, 0, attackGate, 0);
+  p.connect(attackGate, 0, attackTransport, 0);
+  p.connect(attackTransport, 7, attackPrefix, 0);
+  p.connect(attackPrefix, 0, udp, 0);
+
   const hello = heartbeat(p, "audio", udp);
   deviceId(
     p,
     [
       { prefix: pitchPrefix, address: "/sp/pitch" },
       { prefix: onsetPrefix, address: "/sp/onset" },
+      { prefix: chromaPrefix, address: "/sp/chroma" },
+      { prefix: attackPrefix, address: "/sp/attack" },
     ],
     hello
   );
